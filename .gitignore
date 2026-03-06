@@ -1,0 +1,8 @@
+node_modules/
+.env
+npm-debug.log*
+data/knowledge-base.json
+server.log
+server.err.log
+cloudflared.log
+cloudflared-stdout.log
