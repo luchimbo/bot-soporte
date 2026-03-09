@@ -2,21 +2,36 @@ require("dotenv").config();
 
 const express = require("express");
 const axios = require("axios");
+const crypto = require("crypto");
 const { buildAssistantReply, getLLMStatus } = require("./assistant");
 const { getKnowledgeBaseInfo } = require("./knowledge-base");
 const { getProductCatalogInfo } = require("./product-catalog");
 const {
   startTurn,
   finishTurn,
+  updateSessionMetadata,
   getSessionStoreInfo,
   resetSession,
 } = require("./conversation-state");
+const { syncKommoTurn, getKommoStatus } = require("./kommo-client");
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const port = process.env.PORT || 3000;
 const mockSend = process.env.MOCK_WHATSAPP_SEND === "true";
+const kommoSyncOnSimulate = String(process.env.KOMMO_SYNC_ON_SIMULATE || "false")
+  .trim()
+  .toLowerCase() === "true";
+const kommoWidgetEndpointEnabled = String(process.env.KOMMO_WIDGET_ENDPOINT_ENABLED || "true")
+  .trim()
+  .toLowerCase() === "true";
+const kommoWidgetVerifyToken = String(process.env.KOMMO_WIDGET_VERIFY_TOKEN || "false")
+  .trim()
+  .toLowerCase() === "true";
+const kommoWidgetSecret = String(process.env.KOMMO_WIDGET_SECRET || "").trim();
+const kommoWidgetContinueTimeoutMs = Number(process.env.KOMMO_WIDGET_CONTINUE_TIMEOUT_MS || 12000);
 
 const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
 const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -33,6 +48,10 @@ const runtime = {
   lastSendStatus: "idle",
   lastSendTo: null,
   lastSendError: null,
+  kommoWidgetEvents: 0,
+  lastKommoWidgetAt: null,
+  lastKommoWidgetStatus: "idle",
+  lastKommoWidgetError: null,
 };
 
 app.get("/health", (_, res) => {
@@ -46,6 +65,7 @@ app.get("/health", (_, res) => {
     accessTokenConfigured: Boolean(accessToken),
     phoneNumberIdConfigured: Boolean(phoneNumberId),
   };
+  const kommo = getKommoStatus();
 
   res.status(200).json({
     ok: true,
@@ -56,6 +76,7 @@ app.get("/health", (_, res) => {
     productCatalog: catalog,
     sessions,
     whatsapp,
+    kommo,
     runtime,
   });
 });
@@ -83,6 +104,50 @@ app.post("/simulate", async (req, res) => {
     }
   );
 
+  const turnAnalysis = buildTurnAnalysis({
+    userText,
+    result,
+    sessionSnapshot: updatedSession,
+  });
+
+  let kommo = null;
+  if (kommoSyncOnSimulate) {
+    try {
+      const kommoResult = await syncKommoTurn({
+        sessionContext: updatedSession,
+        phone: sessionId,
+        userText,
+        assistantText: result.text,
+        assistantMode: result.mode,
+        activeProduct: result.activeProduct || updatedSession.currentProduct || null,
+        intent: result.stateUpdate?.lastIntent || updatedSession.lastIntent,
+        hits: result.hits.length,
+        styleHits: (result.styleExamples || []).length,
+        orderNumber: turnAnalysis.orderNumber,
+        marketplaceUser: turnAnalysis.marketplaceUser,
+        urgency: turnAnalysis.urgency,
+        escalate: turnAnalysis.escalate,
+        attempts: turnAnalysis.attempts,
+        sourceLabel: "WhatsApp",
+      });
+
+      kommo = kommoResult;
+      if (kommoResult?.ok) {
+        updateSessionMetadata(sessionId, {
+          kommoContactId: kommoResult.contactId,
+          kommoLeadId: kommoResult.leadId,
+        });
+      }
+    } catch (error) {
+      const message = formatKommoError(error);
+      kommo = {
+        ok: false,
+        error: message,
+      };
+      console.error("Kommo sync error (simulate):", message);
+    }
+  }
+
   return res.status(200).json({
     reply: result.text,
     mode: result.mode,
@@ -91,6 +156,33 @@ app.post("/simulate", async (req, res) => {
     sessionId,
     activeProduct: result.activeProduct || updatedSession.currentProduct || null,
     pendingProductSwitch: updatedSession.pendingProductSwitch || null,
+    escalate: turnAnalysis.escalate,
+    kommo,
+  });
+});
+
+app.post("/kommo/widget-request", (req, res) => {
+  if (!kommoWidgetEndpointEnabled) {
+    return res.sendStatus(404);
+  }
+
+  const payload = req.body || {};
+  runtime.kommoWidgetEvents += 1;
+  runtime.lastKommoWidgetAt = new Date().toISOString();
+  runtime.lastKommoWidgetStatus = "received";
+
+  res.sendStatus(200);
+
+  setImmediate(async () => {
+    try {
+      await handleKommoWidgetRequest(payload);
+      runtime.lastKommoWidgetStatus = "replied";
+      runtime.lastKommoWidgetError = null;
+    } catch (error) {
+      runtime.lastKommoWidgetStatus = "error";
+      runtime.lastKommoWidgetError = formatKommoError(error);
+      console.error("Kommo widget error:", formatKommoError(error));
+    }
   });
 });
 
@@ -146,6 +238,47 @@ app.post("/webhook", async (req, res) => {
       styleHits: (result.styleExamples || []).length,
     });
 
+    const turnAnalysis = buildTurnAnalysis({
+      userText,
+      result,
+      sessionSnapshot: updatedSession,
+    });
+
+    try {
+      const kommoResult = await syncKommoTurn({
+        sessionContext: updatedSession,
+        phone: from,
+        userText,
+        assistantText: replyText,
+        assistantMode: result.mode,
+        activeProduct: result.activeProduct || updatedSession.currentProduct || null,
+        intent: result.stateUpdate?.lastIntent || updatedSession.lastIntent,
+        hits: result.hits.length,
+        styleHits: (result.styleExamples || []).length,
+        orderNumber: turnAnalysis.orderNumber,
+        marketplaceUser: turnAnalysis.marketplaceUser,
+        urgency: turnAnalysis.urgency,
+        escalate: turnAnalysis.escalate,
+        attempts: turnAnalysis.attempts,
+        sourceLabel: "WhatsApp",
+      });
+
+      if (kommoResult?.ok) {
+        updateSessionMetadata(from, {
+          kommoContactId: kommoResult.contactId,
+          kommoLeadId: kommoResult.leadId,
+        });
+      }
+
+      if (!kommoResult?.skipped) {
+        console.log(
+          `Kommo sync | ok=${Boolean(kommoResult?.ok)} | lead=${kommoResult?.leadId || "n/a"} | contact=${kommoResult?.contactId || "n/a"}`
+        );
+      }
+    } catch (kommoError) {
+      console.error("Kommo sync error:", formatKommoError(kommoError));
+    }
+
     runtime.lastWebhookStatus = "replied";
 
     console.log(
@@ -161,6 +294,178 @@ app.post("/webhook", async (req, res) => {
     return res.sendStatus(200);
   }
 });
+
+async function handleKommoWidgetRequest(payload) {
+  const token = String(payload?.token || "").trim();
+  const data = payload?.data || {};
+  const returnUrl = String(payload?.return_url || "").trim();
+
+  if (kommoWidgetVerifyToken) {
+    if (!kommoWidgetSecret) {
+      throw new Error("KOMMO_WIDGET_VERIFY_TOKEN=true pero falta KOMMO_WIDGET_SECRET");
+    }
+
+    if (!token) {
+      throw new Error("Widget request sin token JWT");
+    }
+
+    if (!verifyKommoJwt(token, kommoWidgetSecret)) {
+      throw new Error("Token JWT de Kommo invalido");
+    }
+  }
+
+  const userText = extractKommoIncomingText(data);
+  const leadId = parseNumericId(data.lead_id || data.lead || data.entity_id);
+  const contactId = parseNumericId(data.contact_id || data.contact);
+  const phone = String(
+    data.phone || data.contact_phone || data.from_phone || data.whatsapp || data.phone_number || ""
+  ).trim();
+  const sessionId = buildKommoSessionId({ leadId, contactId, data });
+
+  if (leadId || contactId) {
+    updateSessionMetadata(sessionId, {
+      kommoLeadId: leadId || null,
+      kommoContactId: contactId || null,
+    });
+  }
+
+  if (!userText) {
+    await sendKommoWidgetContinue(returnUrl, {
+      data: {
+        status: "ignored-empty",
+      },
+      execute_handlers: [
+        {
+          handler: "show",
+          params: {
+            type: "text",
+            value: "No recibi texto del cliente. Decime el problema y te ayudo.",
+          },
+        },
+      ],
+    });
+    return;
+  }
+
+  const sessionContext = startTurn(sessionId, userText);
+  const result = await buildAssistantReply(userText, {
+    sessionContext,
+    sessionId,
+  });
+
+  const updatedSession = finishTurn(sessionId, result.text, result.stateUpdate, {
+    mode: result.mode,
+    hits: result.hits.length,
+    styleHits: (result.styleExamples || []).length,
+  });
+
+  const turnAnalysis = buildTurnAnalysis({
+    userText,
+    result,
+    sessionSnapshot: updatedSession,
+  });
+
+  try {
+    const kommoSync = await syncKommoTurn({
+      sessionContext: updatedSession,
+      phone,
+      userText,
+      assistantText: result.text,
+      assistantMode: result.mode,
+      activeProduct: result.activeProduct || updatedSession.currentProduct || null,
+      intent: result.stateUpdate?.lastIntent || updatedSession.lastIntent,
+      hits: result.hits.length,
+      styleHits: (result.styleExamples || []).length,
+      orderNumber: turnAnalysis.orderNumber,
+      marketplaceUser: turnAnalysis.marketplaceUser,
+      urgency: turnAnalysis.urgency,
+      escalate: turnAnalysis.escalate,
+      attempts: turnAnalysis.attempts,
+      sourceLabel: "Kommo",
+      kommoLeadId: leadId,
+      kommoContactId: contactId,
+    });
+
+    if (kommoSync?.ok) {
+      updateSessionMetadata(sessionId, {
+        kommoContactId: kommoSync.contactId,
+        kommoLeadId: kommoSync.leadId,
+      });
+    }
+  } catch (kommoError) {
+    console.error("Kommo sync error (widget):", formatKommoError(kommoError));
+  }
+
+  await sendKommoWidgetContinue(
+    returnUrl,
+    buildKommoWidgetReturnPayload({
+      replyText: result.text,
+      mode: result.mode,
+      intent: result.stateUpdate?.lastIntent || updatedSession.lastIntent,
+      activeProduct: result.activeProduct || updatedSession.currentProduct || null,
+      escalate: turnAnalysis.escalate,
+      attempts: turnAnalysis.attempts,
+    })
+  );
+}
+
+function buildKommoWidgetReturnPayload({
+  replyText,
+  mode,
+  intent,
+  activeProduct,
+  escalate,
+  attempts,
+}) {
+  const trimmedReply = limitText(String(replyText || ""), 3900);
+  const executeHandlers = [
+    {
+      handler: "show",
+      params: {
+        type: "text",
+        value: trimmedReply,
+      },
+    },
+  ];
+
+  if (escalate) {
+    executeHandlers.push({
+      handler: "show",
+      params: {
+        type: "text",
+        value:
+          "Te paso con un representante humano para seguir con el caso. Ya le comparti todo el contexto.",
+      },
+    });
+  }
+
+  return {
+    data: {
+      status: "ok",
+      mode: String(mode || "unknown"),
+      intent: String(intent || "consulta_general"),
+      product: String(activeProduct?.name || ""),
+      escalate: escalate ? "1" : "0",
+      attempts: String(Number(attempts || 0)),
+      reply: trimmedReply,
+    },
+    execute_handlers: executeHandlers,
+  };
+}
+
+async function sendKommoWidgetContinue(returnUrl, payload) {
+  if (!returnUrl) {
+    throw new Error("Widget request sin return_url");
+  }
+
+  await axios.post(returnUrl, payload, {
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    timeout: kommoWidgetContinueTimeoutMs,
+  });
+}
 
 async function sendWhatsAppText({ to, body, runtime }) {
   if (mockSend) {
@@ -247,6 +552,237 @@ function buildRecipientCandidates(rawTo) {
   return [...new Set(candidates)];
 }
 
+function buildTurnAnalysis({ userText, result, sessionSnapshot }) {
+  const intent = result?.stateUpdate?.lastIntent || sessionSnapshot?.lastIntent || "consulta_general";
+  const normalizedText = normalizeText(userText);
+  const orderNumber =
+    extractOrderNumber(userText) || extractLastUserMatch(sessionSnapshot, extractOrderNumber) || null;
+  const marketplaceUser =
+    extractMarketplaceUser(userText) ||
+    extractLastUserMatch(sessionSnapshot, extractMarketplaceUser) ||
+    null;
+  const attempts = countDiagnosticAttempts(sessionSnapshot);
+
+  const explicitHumanRequest =
+    /(hablar|pasame|pasar|quiero|prefiero).*(representante|asesor|humano|persona|ivan)/.test(
+      normalizedText
+    ) || /representante|asesor|humano|persona|ivan/.test(normalizedText);
+  const warrantySignal =
+    /garanti|rma|reemplazo|devolucion|reembolso|falla fisica|defecto/.test(normalizedText) ||
+    intent === "devolucion";
+  const unresolvedSignal =
+    /sigue igual|no funcion|no sirve|continua igual|todavia no|aun no|no se solucion/.test(
+      normalizedText
+    );
+
+  const escalate = explicitHumanRequest || warrantySignal || (unresolvedSignal && attempts >= 2);
+  const urgency = detectUrgency(normalizedText, escalate);
+
+  return {
+    intent,
+    orderNumber,
+    marketplaceUser,
+    attempts,
+    escalate,
+    urgency,
+  };
+}
+
+function countDiagnosticAttempts(sessionSnapshot) {
+  const history = Array.isArray(sessionSnapshot?.messageHistory) ? sessionSnapshot.messageHistory : [];
+  let attempts = 0;
+  for (const message of history) {
+    if (message?.role !== "assistant") {
+      continue;
+    }
+
+    if (isDiagnosticMode(message?.meta?.mode)) {
+      attempts += 1;
+    }
+  }
+
+  return attempts;
+}
+
+function isDiagnosticMode(mode) {
+  return [
+    "ai-rag",
+    "context-followup",
+    "fallback-product-drift",
+    "fallback-no-kb-hits",
+    "fallback-no-llm-key",
+    "fallback-llm-error",
+  ].includes(String(mode || ""));
+}
+
+function extractOrderNumber(text) {
+  const value = String(text || "");
+  const explicitMatch = value.match(/(?:orden|pedido|order|compra)\s*(?:n(?:ro)?\.?|numero|#|:|-)?\s*([a-z0-9-]{4,})/i);
+  if (explicitMatch?.[1]) {
+    return explicitMatch[1].trim();
+  }
+
+  return null;
+}
+
+function extractMarketplaceUser(text) {
+  const value = String(text || "");
+  const match = value.match(
+    /(?:usuario\s*(?:ml|mercado\s*libre)?|ml|mercado\s*libre)\s*(?:es|:|#|-)?\s*([a-z0-9._-]{3,})/i
+  );
+  if (!match?.[1]) {
+    return null;
+  }
+
+  const candidate = match[1].trim();
+  if (/^(si|no|hola|gracias)$/i.test(candidate)) {
+    return null;
+  }
+
+  return candidate;
+}
+
+function detectUrgency(normalizedText, escalate) {
+  if (/urgente|urgencia|hoy|ya|cuanto antes|enojad|molest|reclamo/.test(normalizedText)) {
+    return "alta";
+  }
+
+  if (escalate) {
+    return "media";
+  }
+
+  return "normal";
+}
+
+function extractLastUserMatch(sessionSnapshot, extractor) {
+  const history = Array.isArray(sessionSnapshot?.messageHistory) ? sessionSnapshot.messageHistory : [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message?.role !== "user") {
+      continue;
+    }
+
+    const value = extractor(message?.text || "");
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function extractKommoIncomingText(data) {
+  const candidates = [
+    data?.message,
+    data?.message_text,
+    data?.text,
+    data?.body,
+    data?.incoming_text,
+    data?.msg,
+  ];
+
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function buildKommoSessionId({ leadId, contactId, data }) {
+  const talkId = data?.talk_id || data?.talkId || data?.chat_id || data?.chatId || null;
+  if (leadId) {
+    return `kommo-lead-${leadId}`;
+  }
+
+  if (contactId) {
+    return `kommo-contact-${contactId}`;
+  }
+
+  if (talkId) {
+    return `kommo-talk-${talkId}`;
+  }
+
+  const hash = crypto
+    .createHash("sha1")
+    .update(JSON.stringify(data || {}))
+    .digest("hex")
+    .slice(0, 12);
+
+  return `kommo-anon-${hash}`;
+}
+
+function parseNumericId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const numericMatch = raw.match(/\d+/);
+  if (!numericMatch) {
+    return null;
+  }
+
+  const parsed = Number(numericMatch[0]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function verifyKommoJwt(token, secret) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) {
+    return false;
+  }
+
+  const [headerPart, payloadPart, signaturePart] = parts;
+  if (!headerPart || !payloadPart || !signaturePart) {
+    return false;
+  }
+
+  const data = `${headerPart}.${payloadPart}`;
+  const expectedSignature = base64UrlEncode(
+    crypto.createHmac("sha256", secret).update(data).digest()
+  );
+
+  return safeEqual(expectedSignature, signaturePart);
+}
+
+function base64UrlEncode(buffer) {
+  return Buffer.from(buffer)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function safeEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function limitText(value, maxLength) {
+  const text = String(value || "");
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength - 1)}...`;
+}
+
 function formatWhatsAppError(error) {
   const data = error?.response?.data;
   const code = data?.error?.code;
@@ -262,6 +798,16 @@ function formatWhatsAppError(error) {
   }
 
   return data || message;
+}
+
+function formatKommoError(error) {
+  const status = error?.response?.status;
+  const data = error?.response?.data;
+  if (status) {
+    return `status=${status} data=${JSON.stringify(data || {})}`;
+  }
+
+  return error?.message || "error desconocido";
 }
 
 app.listen(port, () => {

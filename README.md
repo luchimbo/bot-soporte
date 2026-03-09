@@ -19,6 +19,8 @@ Copiar `.env.example` a `.env` y completar:
 - `WHATSAPP_VERIFY_TOKEN`: token secreto para validar webhook.
 - `WHATSAPP_ACCESS_TOKEN`: token de Meta para enviar mensajes.
 - `WHATSAPP_PHONE_NUMBER_ID`: ID del numero de WhatsApp.
+- `KOMMO_SUBDOMAIN`: subdominio de Kommo (sin `.kommo.com`).
+- `KOMMO_LONG_LIVED_TOKEN`: token de larga duracion de integracion privada.
 
 Variables utiles:
 
@@ -38,6 +40,14 @@ Variables utiles:
 - `STYLE_TOP_K`: cantidad de ejemplos historicos usados al responder.
 - `KB_MIN_STYLE_QUALITY`: puntaje minimo para aceptar respuestas historicas.
 - `KB_STYLE_REQUIRE_RESOLVED=true`: usa solo ejemplos con senal de resolucion positiva.
+- `KOMMO_SYNC_ENABLED=true`: activa sincronizacion de conversaciones hacia Kommo.
+- `KOMMO_SYNC_ON_SIMULATE=false`: evita crear leads cuando usas `/simulate`.
+- `KOMMO_PIPELINE_ID`: pipeline de soporte (opcional pero recomendado).
+- `KOMMO_STAGE_DIAGNOSIS_ID` / `KOMMO_STAGE_ESCALATION_ID`: etapas de diagnostico y escalado.
+- `KOMMO_OWNER_ID`: usuario responsable (ej. Ivan).
+- `KOMMO_WIDGET_ENDPOINT_ENABLED=true`: habilita endpoint `/kommo/widget-request` para Salesbot.
+- `KOMMO_WIDGET_VERIFY_TOKEN=true`: valida JWT del `widget_request` (requiere `KOMMO_WIDGET_SECRET`).
+- `KOMMO_WIDGET_SECRET`: clave secreta de la integracion para validar JWT.
 
 Para usar OpenRouter, ejemplo:
 
@@ -124,6 +134,30 @@ Respuesta esperada:
 - Suscribir campo `messages`
 
 Si pruebas localmente, usa un tunel HTTPS (ngrok o cloudflared).
+
+## 7) Integrar Kommo (token largo)
+
+Para integracion privada en la misma cuenta, se recomienda `KOMMO_LONG_LIVED_TOKEN` (sin OAuth en MVP).
+
+1. Crear integracion privada en Kommo.
+2. Generar token de larga duracion en `Llaves y alcances`.
+3. Cargar `KOMMO_SUBDOMAIN` y `KOMMO_LONG_LIVED_TOKEN` en `.env`.
+4. (Recomendado) completar `KOMMO_PIPELINE_ID`, etapas y `KOMMO_OWNER_ID`.
+5. Configurar en Salesbot un paso `widget_request` apuntando a `https://TU_DOMINIO/kommo/widget-request`.
+
+Comando util para descubrir IDs de usuarios/pipelines/campos:
+
+```bash
+npm run kommo:discover
+```
+
+El endpoint `/health` muestra el bloque `kommo` con el estado de configuracion.
+
+Para probar manualmente el endpoint de Kommo:
+
+```bash
+curl -X POST http://localhost:3000/kommo/widget-request -H "Content-Type: application/json" -d "{\"data\":{\"message\":\"tengo una minifuse 2 y no tengo audio\",\"lead_id\":12345},\"return_url\":\"https://example.com/continue\"}"
+```
 
 ## Flujo de respuesta
 

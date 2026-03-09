@@ -47,6 +47,21 @@ function finishTurn(sessionId, assistantText, stateUpdate = {}, meta = {}) {
   return toSnapshot(session);
 }
 
+function updateSessionMetadata(sessionId, metadata = {}) {
+  cleanupExpiredSessions();
+
+  const session = getOrCreateSession(sessionId);
+  const allowedKeys = ["kommoContactId", "kommoLeadId", "humanActive"];
+  for (const key of allowedKeys) {
+    if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+      session[key] = metadata[key];
+    }
+  }
+
+  session.updatedAt = new Date().toISOString();
+  return toSnapshot(session);
+}
+
 function getSessionContext(sessionId) {
   cleanupExpiredSessions();
   const session = sessions.get(sessionId);
@@ -98,6 +113,18 @@ function applyStateUpdate(session, stateUpdate) {
     session.lastIntent = stateUpdate.lastIntent || null;
   }
 
+  if (Object.prototype.hasOwnProperty.call(stateUpdate, "kommoContactId")) {
+    session.kommoContactId = stateUpdate.kommoContactId || null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(stateUpdate, "kommoLeadId")) {
+    session.kommoLeadId = stateUpdate.kommoLeadId || null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(stateUpdate, "humanActive")) {
+    session.humanActive = Boolean(stateUpdate.humanActive);
+  }
+
   if (stateUpdate.productDriftPrevented) {
     session.metrics.productDriftPrevented += 1;
   }
@@ -119,6 +146,9 @@ function getOrCreateSession(sessionId) {
     pendingProductSwitch: null,
     lastIntent: null,
     lastMode: null,
+    kommoContactId: null,
+    kommoLeadId: null,
+    humanActive: false,
     messageHistory: [],
     metrics: {
       productSwitches: 0,
@@ -160,6 +190,9 @@ function toSnapshot(session) {
     pendingProductSwitch: session.pendingProductSwitch,
     lastIntent: session.lastIntent,
     lastMode: session.lastMode,
+    kommoContactId: session.kommoContactId,
+    kommoLeadId: session.kommoLeadId,
+    humanActive: session.humanActive,
     messageHistory: session.messageHistory.slice(),
     metrics: {
       ...session.metrics,
@@ -170,6 +203,7 @@ function toSnapshot(session) {
 module.exports = {
   startTurn,
   finishTurn,
+  updateSessionMetadata,
   getSessionContext,
   resetSession,
   getSessionStoreInfo,
