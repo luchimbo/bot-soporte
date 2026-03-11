@@ -1,0 +1,30 @@
+[build]
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "zisi"
+  included_files = ["data/knowledge-base.json", "archivos/Productos.xlsx"]
+
+[[redirects]]
+  from = "/health"
+  to = "/.netlify/functions/api/health"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/simulate"
+  to = "/.netlify/functions/api/simulate"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/webhook"
+  to = "/.netlify/functions/api/webhook"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/kommo/widget-request"
+  to = "/.netlify/functions/api/kommo/widget-request"
+  status = 200
+  force = true

@@ -1,8 +1,8 @@
 const fs = require("fs");
-const path = require("path");
 const XLSX = require("xlsx");
+const { resolveProjectPath } = require("./runtime-paths");
 
-const defaultCatalogPath = path.resolve(__dirname, "..", "archivos", "Productos.xlsx");
+const defaultCatalogPath = resolveProjectPath(null, "archivos/Productos.xlsx");
 
 const genericProductTokens = new Set([
   "producto",
@@ -728,16 +728,7 @@ function bigrams(text) {
 }
 
 function getCatalogPath() {
-  const configured = process.env.PRODUCT_CATALOG_FILE;
-  if (!configured) {
-    return defaultCatalogPath;
-  }
-
-  if (path.isAbsolute(configured)) {
-    return configured;
-  }
-
-  return path.resolve(__dirname, "..", configured);
+  return resolveProjectPath(process.env.PRODUCT_CATALOG_FILE, defaultCatalogPath);
 }
 
 function normalizeSku(value) {

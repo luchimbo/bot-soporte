@@ -1,0 +1,57 @@
+{
+  "widget": {
+    "name": "widget.name",
+    "description": "widget.description",
+    "short_description": "widget.short_description",
+    "version": "1.0.0",
+    "interface_version": 2,
+    "init_once": true,
+    "locale": [
+      "es",
+      "en"
+    ],
+    "installation": true,
+    "support": {
+      "link": "https://github.com/luchimbo/bot-soporte",
+      "email": "soporte@pcmidicenter.com"
+    }
+  },
+  "locations": [
+    "settings",
+    "salesbot_designer"
+  ],
+  "tour": {
+    "is_tour": true,
+    "tour_description": "widget.tour_description",
+    "tour_images": {
+      "es": [
+        "/images/logo_main.png"
+      ],
+      "en": [
+        "/images/logo_main.png"
+      ]
+    }
+  },
+  "settings": {
+    "default_backend_url": {
+      "name": "settings.default_backend_url",
+      "type": "text",
+      "required": false,
+      "default_value": ""
+    }
+  },
+  "salesbot_designer": {
+    "logo": "/images/logo.png",
+    "support_request": {
+      "name": "salesbot.handler_name",
+      "settings": {
+        "endpoint_url": {
+          "name": "salesbot.endpoint_url_optional",
+          "default_value": "",
+          "type": "url",
+          "manual": true
+        }
+      }
+    }
+  }
+}

@@ -20,6 +20,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const port = process.env.PORT || 3000;
+const inlineKommoWidgetProcessing = shouldProcessKommoWidgetInline();
 const mockSend = process.env.MOCK_WHATSAPP_SEND === "true";
 const kommoSyncOnSimulate = String(process.env.KOMMO_SYNC_ON_SIMULATE || "false")
   .trim()
@@ -54,137 +55,143 @@ const runtime = {
   lastKommoWidgetError: null,
 };
 
-app.get("/health", (_, res) => {
-  const kbInfo = getKnowledgeBaseInfo();
-  const llm = getLLMStatus();
-  const catalog = getProductCatalogInfo();
-  const sessions = getSessionStoreInfo();
-  const whatsapp = {
-    mockSend,
-    verifyTokenConfigured: Boolean(verifyToken),
-    accessTokenConfigured: Boolean(accessToken),
-    phoneNumberIdConfigured: Boolean(phoneNumberId),
-  };
-  const kommo = getKommoStatus();
+app.get(
+  "/health",
+  asyncRoute(async (_, res) => {
+    const kbInfo = getKnowledgeBaseInfo();
+    const llm = getLLMStatus();
+    const catalog = getProductCatalogInfo();
+    const sessions = await getSessionStoreInfo();
+    const whatsapp = {
+      mockSend,
+      verifyTokenConfigured: Boolean(verifyToken),
+      accessTokenConfigured: Boolean(accessToken),
+      phoneNumberIdConfigured: Boolean(phoneNumberId),
+    };
+    const kommo = getKommoStatus();
 
-  res.status(200).json({
-    ok: true,
-    llmEnabled: llm.enabled,
-    openAIEnabled: llm.enabled,
-    llm,
-    knowledgeBase: kbInfo,
-    productCatalog: catalog,
-    sessions,
-    whatsapp,
-    kommo,
-    runtime,
-  });
-});
+    res.status(200).json({
+      ok: true,
+      llmEnabled: llm.enabled,
+      openAIEnabled: llm.enabled,
+      llm,
+      knowledgeBase: kbInfo,
+      productCatalog: catalog,
+      sessions,
+      whatsapp,
+      kommo,
+      runtime,
+    });
+  })
+);
 
-app.post("/simulate", async (req, res) => {
-  const userText = req.body?.text || "";
-  const sessionId = String(req.body?.sessionId || "simulate-default");
-  if (req.body?.resetSession === true) {
-    resetSession(sessionId);
-  }
+app.post(
+  "/simulate",
+  asyncRoute(async (req, res) => {
+    const userText = req.body?.text || "";
+    const sessionId = String(req.body?.sessionId || "simulate-default");
+    if (req.body?.resetSession === true) {
+      await resetSession(sessionId);
+    }
 
-  const sessionContext = startTurn(sessionId, userText);
-  const result = await buildAssistantReply(userText, {
-    sessionContext,
-    sessionId,
-  });
-  const updatedSession = finishTurn(
-    sessionId,
-    result.text,
-    result.stateUpdate,
-    {
+    const sessionContext = await startTurn(sessionId, userText);
+    const result = await buildAssistantReply(userText, {
+      sessionContext,
+      sessionId,
+    });
+    const updatedSession = await finishTurn(
+      sessionId,
+      result.text,
+      result.stateUpdate,
+      {
+        mode: result.mode,
+        hits: result.hits.length,
+        styleHits: (result.styleExamples || []).length,
+      }
+    );
+
+    const turnAnalysis = buildTurnAnalysis({
+      userText,
+      result,
+      sessionSnapshot: updatedSession,
+    });
+
+    let kommo = null;
+    if (kommoSyncOnSimulate) {
+      try {
+        const kommoResult = await syncKommoTurn({
+          sessionContext: updatedSession,
+          phone: sessionId,
+          userText,
+          assistantText: result.text,
+          assistantMode: result.mode,
+          activeProduct: result.activeProduct || updatedSession.currentProduct || null,
+          intent: result.stateUpdate?.lastIntent || updatedSession.lastIntent,
+          hits: result.hits.length,
+          styleHits: (result.styleExamples || []).length,
+          orderNumber: turnAnalysis.orderNumber,
+          marketplaceUser: turnAnalysis.marketplaceUser,
+          urgency: turnAnalysis.urgency,
+          escalate: turnAnalysis.escalate,
+          attempts: turnAnalysis.attempts,
+          sourceLabel: "WhatsApp",
+        });
+
+        kommo = kommoResult;
+        if (kommoResult?.ok) {
+          await updateSessionMetadata(sessionId, {
+            kommoContactId: kommoResult.contactId,
+            kommoLeadId: kommoResult.leadId,
+          });
+        }
+      } catch (error) {
+        const message = formatKommoError(error);
+        kommo = {
+          ok: false,
+          error: message,
+        };
+        console.error("Kommo sync error (simulate):", message);
+      }
+    }
+
+    return res.status(200).json({
+      reply: result.text,
       mode: result.mode,
       hits: result.hits.length,
       styleHits: (result.styleExamples || []).length,
+      sessionId,
+      activeProduct: result.activeProduct || updatedSession.currentProduct || null,
+      pendingProductSwitch: updatedSession.pendingProductSwitch || null,
+      escalate: turnAnalysis.escalate,
+      kommo,
+    });
+  })
+);
+
+app.post(
+  "/kommo/widget-request",
+  asyncRoute(async (req, res) => {
+    if (!kommoWidgetEndpointEnabled) {
+      return res.sendStatus(404);
     }
-  );
 
-  const turnAnalysis = buildTurnAnalysis({
-    userText,
-    result,
-    sessionSnapshot: updatedSession,
-  });
+    const payload = req.body || {};
+    runtime.kommoWidgetEvents += 1;
+    runtime.lastKommoWidgetAt = new Date().toISOString();
+    runtime.lastKommoWidgetStatus = "received";
 
-  let kommo = null;
-  if (kommoSyncOnSimulate) {
-    try {
-      const kommoResult = await syncKommoTurn({
-        sessionContext: updatedSession,
-        phone: sessionId,
-        userText,
-        assistantText: result.text,
-        assistantMode: result.mode,
-        activeProduct: result.activeProduct || updatedSession.currentProduct || null,
-        intent: result.stateUpdate?.lastIntent || updatedSession.lastIntent,
-        hits: result.hits.length,
-        styleHits: (result.styleExamples || []).length,
-        orderNumber: turnAnalysis.orderNumber,
-        marketplaceUser: turnAnalysis.marketplaceUser,
-        urgency: turnAnalysis.urgency,
-        escalate: turnAnalysis.escalate,
-        attempts: turnAnalysis.attempts,
-        sourceLabel: "WhatsApp",
-      });
-
-      kommo = kommoResult;
-      if (kommoResult?.ok) {
-        updateSessionMetadata(sessionId, {
-          kommoContactId: kommoResult.contactId,
-          kommoLeadId: kommoResult.leadId,
-        });
-      }
-    } catch (error) {
-      const message = formatKommoError(error);
-      kommo = {
-        ok: false,
-        error: message,
-      };
-      console.error("Kommo sync error (simulate):", message);
+    if (inlineKommoWidgetProcessing) {
+      await processKommoWidgetPayload(payload);
+      return res.sendStatus(200);
     }
-  }
 
-  return res.status(200).json({
-    reply: result.text,
-    mode: result.mode,
-    hits: result.hits.length,
-    styleHits: (result.styleExamples || []).length,
-    sessionId,
-    activeProduct: result.activeProduct || updatedSession.currentProduct || null,
-    pendingProductSwitch: updatedSession.pendingProductSwitch || null,
-    escalate: turnAnalysis.escalate,
-    kommo,
-  });
-});
+    res.sendStatus(200);
 
-app.post("/kommo/widget-request", (req, res) => {
-  if (!kommoWidgetEndpointEnabled) {
-    return res.sendStatus(404);
-  }
-
-  const payload = req.body || {};
-  runtime.kommoWidgetEvents += 1;
-  runtime.lastKommoWidgetAt = new Date().toISOString();
-  runtime.lastKommoWidgetStatus = "received";
-
-  res.sendStatus(200);
-
-  setImmediate(async () => {
-    try {
-      await handleKommoWidgetRequest(payload);
-      runtime.lastKommoWidgetStatus = "replied";
-      runtime.lastKommoWidgetError = null;
-    } catch (error) {
-      runtime.lastKommoWidgetStatus = "error";
-      runtime.lastKommoWidgetError = formatKommoError(error);
-      console.error("Kommo widget error:", formatKommoError(error));
-    }
-  });
-});
+    setImmediate(() => {
+      void processKommoWidgetPayload(payload);
+    });
+  })
+);
 
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -198,102 +205,129 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-app.post("/webhook", async (req, res) => {
-  try {
-    runtime.webhookEvents += 1;
-    runtime.lastWebhookAt = new Date().toISOString();
-    runtime.lastWebhookStatus = "received";
-
-    console.log("Evento webhook recibido");
-    const message = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    if (!message) {
-      console.log("Evento sin mensaje de usuario");
-      runtime.lastWebhookStatus = "ignored-no-message";
-      return res.sendStatus(200);
-    }
-
-    const from = message.from;
-    const userText = message.text?.body || "";
-    runtime.lastInboundFrom = from || null;
-    runtime.lastInboundPreview = String(userText || "").slice(0, 140) || null;
-
-    if (!userText) {
-      console.log("Mensaje sin texto, no se responde automaticamente");
-      runtime.lastWebhookStatus = "ignored-non-text";
-      return res.sendStatus(200);
-    }
-
-    console.log(`Mensaje de ${from}: ${userText}`);
-    const sessionContext = startTurn(from, userText);
-    const result = await buildAssistantReply(userText, {
-      sessionContext,
-      sessionId: from,
-    });
-    const replyText = result.text;
-
-    await sendWhatsAppText({ to: from, body: replyText, runtime });
-    const updatedSession = finishTurn(from, replyText, result.stateUpdate, {
-      mode: result.mode,
-      hits: result.hits.length,
-      styleHits: (result.styleExamples || []).length,
-    });
-
-    const turnAnalysis = buildTurnAnalysis({
-      userText,
-      result,
-      sessionSnapshot: updatedSession,
-    });
-
+app.post(
+  "/webhook",
+  asyncRoute(async (req, res) => {
     try {
-      const kommoResult = await syncKommoTurn({
-        sessionContext: updatedSession,
-        phone: from,
-        userText,
-        assistantText: replyText,
-        assistantMode: result.mode,
-        activeProduct: result.activeProduct || updatedSession.currentProduct || null,
-        intent: result.stateUpdate?.lastIntent || updatedSession.lastIntent,
+      runtime.webhookEvents += 1;
+      runtime.lastWebhookAt = new Date().toISOString();
+      runtime.lastWebhookStatus = "received";
+
+      console.log("Evento webhook recibido");
+      const message = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+      if (!message) {
+        console.log("Evento sin mensaje de usuario");
+        runtime.lastWebhookStatus = "ignored-no-message";
+        return res.sendStatus(200);
+      }
+
+      const from = message.from;
+      const userText = message.text?.body || "";
+      runtime.lastInboundFrom = from || null;
+      runtime.lastInboundPreview = String(userText || "").slice(0, 140) || null;
+
+      if (!userText) {
+        console.log("Mensaje sin texto, no se responde automaticamente");
+        runtime.lastWebhookStatus = "ignored-non-text";
+        return res.sendStatus(200);
+      }
+
+      console.log(`Mensaje de ${from}: ${userText}`);
+      const sessionContext = await startTurn(from, userText);
+      const result = await buildAssistantReply(userText, {
+        sessionContext,
+        sessionId: from,
+      });
+      const replyText = result.text;
+
+      await sendWhatsAppText({ to: from, body: replyText, runtime });
+      const updatedSession = await finishTurn(from, replyText, result.stateUpdate, {
+        mode: result.mode,
         hits: result.hits.length,
         styleHits: (result.styleExamples || []).length,
-        orderNumber: turnAnalysis.orderNumber,
-        marketplaceUser: turnAnalysis.marketplaceUser,
-        urgency: turnAnalysis.urgency,
-        escalate: turnAnalysis.escalate,
-        attempts: turnAnalysis.attempts,
-        sourceLabel: "WhatsApp",
       });
 
-      if (kommoResult?.ok) {
-        updateSessionMetadata(from, {
-          kommoContactId: kommoResult.contactId,
-          kommoLeadId: kommoResult.leadId,
+      const turnAnalysis = buildTurnAnalysis({
+        userText,
+        result,
+        sessionSnapshot: updatedSession,
+      });
+
+      try {
+        const kommoResult = await syncKommoTurn({
+          sessionContext: updatedSession,
+          phone: from,
+          userText,
+          assistantText: replyText,
+          assistantMode: result.mode,
+          activeProduct: result.activeProduct || updatedSession.currentProduct || null,
+          intent: result.stateUpdate?.lastIntent || updatedSession.lastIntent,
+          hits: result.hits.length,
+          styleHits: (result.styleExamples || []).length,
+          orderNumber: turnAnalysis.orderNumber,
+          marketplaceUser: turnAnalysis.marketplaceUser,
+          urgency: turnAnalysis.urgency,
+          escalate: turnAnalysis.escalate,
+          attempts: turnAnalysis.attempts,
+          sourceLabel: "WhatsApp",
         });
+
+        if (kommoResult?.ok) {
+          await updateSessionMetadata(from, {
+            kommoContactId: kommoResult.contactId,
+            kommoLeadId: kommoResult.leadId,
+          });
+        }
+
+        if (!kommoResult?.skipped) {
+          console.log(
+            `Kommo sync | ok=${Boolean(kommoResult?.ok)} | lead=${kommoResult?.leadId || "n/a"} | contact=${kommoResult?.contactId || "n/a"}`
+          );
+        }
+      } catch (kommoError) {
+        console.error("Kommo sync error:", formatKommoError(kommoError));
       }
 
-      if (!kommoResult?.skipped) {
-        console.log(
-          `Kommo sync | ok=${Boolean(kommoResult?.ok)} | lead=${kommoResult?.leadId || "n/a"} | contact=${kommoResult?.contactId || "n/a"}`
-        );
-      }
-    } catch (kommoError) {
-      console.error("Kommo sync error:", formatKommoError(kommoError));
+      runtime.lastWebhookStatus = "replied";
+
+      console.log(
+        `Respuesta enviada a ${from} | modo=${result.mode} | hits=${result.hits.length} | styleHits=${(result.styleExamples || []).length} | producto=${updatedSession.currentProduct?.name || "none"}`
+      );
+      return res.sendStatus(200);
+    } catch (error) {
+      const msg = formatWhatsAppError(error);
+      console.error("Webhook error:", msg);
+      runtime.lastWebhookStatus = "error";
+      runtime.lastSendStatus = "error";
+      runtime.lastSendError = typeof msg === "string" ? msg : JSON.stringify(msg);
+      return res.sendStatus(200);
     }
+  })
+);
 
-    runtime.lastWebhookStatus = "replied";
-
-    console.log(
-      `Respuesta enviada a ${from} | modo=${result.mode} | hits=${result.hits.length} | styleHits=${(result.styleExamples || []).length} | producto=${updatedSession.currentProduct?.name || "none"}`
-    );
-    return res.sendStatus(200);
-  } catch (error) {
-    const msg = formatWhatsAppError(error);
-    console.error("Webhook error:", msg);
-    runtime.lastWebhookStatus = "error";
-    runtime.lastSendStatus = "error";
-    runtime.lastSendError = typeof msg === "string" ? msg : JSON.stringify(msg);
-    return res.sendStatus(200);
+app.use((error, _req, res, next) => {
+  console.error("App error:", formatKommoError(error));
+  if (res.headersSent) {
+    return next(error);
   }
+
+  return res.status(500).json({
+    ok: false,
+    error: "internal_error",
+  });
 });
+
+async function processKommoWidgetPayload(payload) {
+  try {
+    await handleKommoWidgetRequest(payload);
+    runtime.lastKommoWidgetStatus = "replied";
+    runtime.lastKommoWidgetError = null;
+  } catch (error) {
+    runtime.lastKommoWidgetStatus = "error";
+    runtime.lastKommoWidgetError = formatKommoError(error);
+    console.error("Kommo widget error:", formatKommoError(error));
+  }
+}
 
 async function handleKommoWidgetRequest(payload) {
   const token = String(payload?.token || "").trim();
@@ -323,7 +357,7 @@ async function handleKommoWidgetRequest(payload) {
   const sessionId = buildKommoSessionId({ leadId, contactId, data });
 
   if (leadId || contactId) {
-    updateSessionMetadata(sessionId, {
+    await updateSessionMetadata(sessionId, {
       kommoLeadId: leadId || null,
       kommoContactId: contactId || null,
     });
@@ -347,13 +381,13 @@ async function handleKommoWidgetRequest(payload) {
     return;
   }
 
-  const sessionContext = startTurn(sessionId, userText);
+  const sessionContext = await startTurn(sessionId, userText);
   const result = await buildAssistantReply(userText, {
     sessionContext,
     sessionId,
   });
 
-  const updatedSession = finishTurn(sessionId, result.text, result.stateUpdate, {
+  const updatedSession = await finishTurn(sessionId, result.text, result.stateUpdate, {
     mode: result.mode,
     hits: result.hits.length,
     styleHits: (result.styleExamples || []).length,
@@ -387,7 +421,7 @@ async function handleKommoWidgetRequest(payload) {
     });
 
     if (kommoSync?.ok) {
-      updateSessionMetadata(sessionId, {
+      await updateSessionMetadata(sessionId, {
         kommoContactId: kommoSync.contactId,
         kommoLeadId: kommoSync.leadId,
       });
@@ -810,6 +844,30 @@ function formatKommoError(error) {
   return error?.message || "error desconocido";
 }
 
-app.listen(port, () => {
-  console.log(`Servidor listo en http://localhost:${port}`);
-});
+function asyncRoute(handler) {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res, next)).catch(next);
+  };
+}
+
+function shouldProcessKommoWidgetInline() {
+  if (String(process.env.KOMMO_WIDGET_INLINE_PROCESSING || "").trim().toLowerCase() === "true") {
+    return true;
+  }
+
+  return ["NETLIFY", "AWS_LAMBDA_FUNCTION_NAME", "LAMBDA_TASK_ROOT"].some(
+    (key) => String(process.env[key] || "").trim() !== ""
+  );
+}
+
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`Servidor listo en http://localhost:${port}`);
+  });
+}
+
+module.exports = {
+  app,
+  handleKommoWidgetRequest,
+  runtime,
+};

@@ -29,6 +29,8 @@ Variables utiles:
 - `PRODUCT_CATALOG_FILE=archivos/Productos.xlsx`: catalogo para bloquear producto en chat.
 - `PRODUCT_MATCH_MIN_SCORE`: sensibilidad del matcher de productos.
 - `SESSION_TTL_HOURS` / `SESSION_HISTORY_LIMIT`: memoria conversacional por telefono.
+- `SESSION_STORE_PREFIX`: prefijo de claves para sesiones persistentes.
+- `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`: store persistente recomendado para Netlify/serverless.
 - `KB_MAX_WHATSAPP_DOCS` / `KB_MAX_EMAIL_DOCS`: limite de documentos para el indice.
 - `KB_ENABLE_MANUALS`: activa indexado de manuales PDF.
 - `KB_MANUALS_DIR`: carpeta base de manuales (default `archivos/Manuales`).
@@ -105,6 +107,36 @@ Nota: para indexar PDF se usa el binario `pdftotext` (Poppler). Si no esta dispo
 npm start
 ```
 
+## Deploy en Netlify con contexto conversacional
+
+Para Netlify, este proyecto ya incluye:
+
+- `netlify/functions/api.js`: wrapper serverless para las rutas existentes.
+- `netlify.toml`: redirects para `/health`, `/simulate`, `/webhook` y `/kommo/widget-request`.
+- soporte de sesiones persistentes con Upstash Redis cuando cargas `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN`.
+
+Recomendado para no perder contexto entre mensajes:
+
+```env
+UPSTASH_REDIS_REST_URL=pega_tu_url_de_upstash
+UPSTASH_REDIS_REST_TOKEN=pega_tu_token_de_upstash
+SESSION_STORE_PREFIX=soporte:sessions:
+```
+
+En Netlify, el endpoint critico de Kommo queda asi:
+
+```text
+https://TU-SITIO.netlify.app/kommo/widget-request
+```
+
+Y el healthcheck:
+
+```text
+https://TU-SITIO.netlify.app/health
+```
+
+La guia paso a paso esta en `docs/netlify-kommo-setup.md`.
+
 ## 5) Probar local (sin WhatsApp)
 
 ```bash
@@ -145,6 +177,20 @@ Para integracion privada en la misma cuenta, se recomienda `KOMMO_LONG_LIVED_TOK
 4. (Recomendado) completar `KOMMO_PIPELINE_ID`, etapas y `KOMMO_OWNER_ID`.
 5. Configurar en Salesbot un paso `widget_request` apuntando a `https://TU_DOMINIO/kommo/widget-request`.
 
+El paquete minimo del widget privado para Kommo esta en `kommo-widget/`.
+Subilo como `.zip` dentro de la integracion privada para poder usarlo en `salesbot_designer`.
+
+Para generar el `.zip` listo para subir:
+
+```bash
+npm run kommo:package
+```
+
+Eso crea `dist/kommo-widget.zip`.
+Subi ese archivo tal cual; no zipees manualmente la carpeta `kommo-widget/` porque Kommo necesita los archivos del widget en la raiz del zip.
+Ese zip ya incluye la carpeta `images/` con los logos obligatorios del widget.
+Si queres que el zip salga ya preconfigurado con la URL final del backend, defini antes `KOMMO_WIDGET_DEFAULT_BACKEND_URL` en `.env` con la URL completa terminada en `/kommo/widget-request`.
+
 Comando util para descubrir IDs de usuarios/pipelines/campos:
 
 ```bash
@@ -158,6 +204,66 @@ Para probar manualmente el endpoint de Kommo:
 ```bash
 curl -X POST http://localhost:3000/kommo/widget-request -H "Content-Type: application/json" -d "{\"data\":{\"message\":\"tengo una minifuse 2 y no tengo audio\",\"lead_id\":12345},\"return_url\":\"https://example.com/continue\"}"
 ```
+
+### Probar local sin Kommo real
+
+1. Levantar el servidor:
+
+```bash
+npm start
+```
+
+2. En otra terminal, correr el smoke test:
+
+```bash
+npm run kommo:smoke
+```
+
+Eso hace este flujo local:
+
+- envia un `widget_request` sintetico a `POST /kommo/widget-request`
+- levanta un callback local temporal para capturar el `return_url`
+- imprime el payload final que Kommo recibiria
+
+### Probar end-to-end con Kommo real desde local
+
+1. Levantar el servidor local:
+
+```bash
+npm start
+```
+
+2. Abrir un tunel HTTPS a tu maquina (ej. cloudflared):
+
+```bash
+cloudflared tunnel --url http://localhost:3000
+```
+
+3. Tomar la URL publica generada y usarla en Salesbot:
+
+```text
+https://TU-URL.trycloudflare.com/kommo/widget-request
+```
+
+4. En Kommo:
+
+- subir el widget de `kommo-widget/`
+- agregar el paso `Enviar a backend de soporte` en Salesbot
+- pegar la URL publica del paso
+
+5. Enviar un mensaje desde el chat de WhatsApp conectado a Kommo.
+
+6. Verificar en local:
+
+```bash
+curl http://localhost:3000/health
+```
+
+Mirar especialmente:
+
+- `runtime.kommoWidgetEvents`
+- `runtime.lastKommoWidgetStatus`
+- `runtime.lastKommoWidgetError`
 
 ## Flujo de respuesta
 

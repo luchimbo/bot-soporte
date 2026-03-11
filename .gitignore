@@ -6,3 +6,4 @@ server.log
 server.err.log
 cloudflared.log
 cloudflared-stdout.log
+dist/

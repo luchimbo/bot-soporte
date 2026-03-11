@@ -1,5 +1,5 @@
 const fs = require("fs");
-const path = require("path");
+const { resolveProjectPath } = require("./runtime-paths");
 
 let cache = {
   filePath: null,
@@ -195,15 +195,7 @@ function loadKnowledgeBase() {
 }
 
 function getKnowledgeBasePath() {
-  if (process.env.KNOWLEDGE_BASE_FILE) {
-    if (path.isAbsolute(process.env.KNOWLEDGE_BASE_FILE)) {
-      return process.env.KNOWLEDGE_BASE_FILE;
-    }
-
-    return path.resolve(__dirname, "..", process.env.KNOWLEDGE_BASE_FILE);
-  }
-
-  return path.resolve(__dirname, "..", "data", "knowledge-base.json");
+  return resolveProjectPath(process.env.KNOWLEDGE_BASE_FILE, "data/knowledge-base.json");
 }
 
 function scoreDocument({ doc, normalizedQuery, queryTokens, queryIntent, productContext }) {

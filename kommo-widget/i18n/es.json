@@ -1,0 +1,16 @@
+{
+  "widget": {
+    "name": "Bot de soporte tecnico",
+    "short_description": "Conecta el Salesbot con el backend LLM/RAG.",
+    "description": "Usa este widget en Salesbot para enviar mensajes del chat a tu backend en <b>/kommo/widget-request</b> y devolver la respuesta al mismo chat.",
+    "tour_description": "Configura la URL publica de tu backend y agrega este widget como paso en Salesbot."
+  },
+  "settings": {
+    "default_backend_url": "URL por defecto del backend"
+  },
+  "salesbot": {
+    "handler_name": "Enviar a backend de soporte",
+    "endpoint_url": "URL publica del widget_request",
+    "endpoint_url_optional": "URL publica del widget_request (opcional, si queda vacio usa la URL por defecto)"
+  }
+}
