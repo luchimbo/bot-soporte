@@ -7,17 +7,18 @@ Netlify no mantiene memoria estable entre invocaciones, asi que para conservar c
 En este proyecto eso ya queda resuelto asi:
 
 - `memory` por defecto para local y servidores tradicionales
-- `Upstash Redis` automaticamente cuando cargas:
-  - `UPSTASH_REDIS_REST_URL`
-  - `UPSTASH_REDIS_REST_TOKEN`
+- `Turso` automaticamente cuando cargas:
+  - `TURSO_DATABASE_URL`
+  - `TURSO_AUTH_TOKEN`
 
 ## Variables minimas para Netlify
 
 Ademas de tus variables habituales de LLM, Kommo y WhatsApp, agrega estas dos para el contexto:
 
 ```env
-UPSTASH_REDIS_REST_URL=pega_tu_url_de_upstash
-UPSTASH_REDIS_REST_TOKEN=pega_tu_token_de_upstash
+TURSO_DATABASE_URL=libsql://tu-db-tu-org.turso.io
+TURSO_AUTH_TOKEN=pega_tu_token_de_turso
+TURSO_SESSION_TABLE=conversation_sessions
 SESSION_STORE_PREFIX=soporte:sessions:
 ```
 
@@ -28,7 +29,7 @@ SESSION_STORE_PREFIX=soporte:sessions:
 3. En `Site configuration -> Environment variables`, carga:
    - tus variables de Kommo
    - tus variables de OpenRouter/OpenAI
-   - las variables de Upstash
+   - las variables de Turso
 4. Hace deploy.
 
 Este repo ya trae `netlify.toml`, asi que las rutas quedan expuestas automaticamente.
@@ -42,7 +43,7 @@ Este repo ya trae `netlify.toml`, asi que las rutas quedan expuestas automaticam
 ## Verificacion rapida
 
 1. Abrir `https://TU-SITIO.netlify.app/health`.
-2. Confirmar que `sessions.backend` muestre `upstash-redis`.
+2. Confirmar que `sessions.backend` muestre `turso`.
 3. Confirmar que `kommo.configured` este en `true`.
 
 ## Kommo

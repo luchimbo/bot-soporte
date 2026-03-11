@@ -30,7 +30,7 @@ Variables utiles:
 - `PRODUCT_MATCH_MIN_SCORE`: sensibilidad del matcher de productos.
 - `SESSION_TTL_HOURS` / `SESSION_HISTORY_LIMIT`: memoria conversacional por telefono.
 - `SESSION_STORE_PREFIX`: prefijo de claves para sesiones persistentes.
-- `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`: store persistente recomendado para Netlify/serverless.
+- `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN`: store persistente recomendado para Netlify/serverless.
 - `KB_MAX_WHATSAPP_DOCS` / `KB_MAX_EMAIL_DOCS`: limite de documentos para el indice.
 - `KB_ENABLE_MANUALS`: activa indexado de manuales PDF.
 - `KB_MANUALS_DIR`: carpeta base de manuales (default `archivos/Manuales`).
@@ -113,13 +113,14 @@ Para Netlify, este proyecto ya incluye:
 
 - `netlify/functions/api.js`: wrapper serverless para las rutas existentes.
 - `netlify.toml`: redirects para `/health`, `/simulate`, `/webhook` y `/kommo/widget-request`.
-- soporte de sesiones persistentes con Upstash Redis cuando cargas `UPSTASH_REDIS_REST_URL` y `UPSTASH_REDIS_REST_TOKEN`.
+- soporte de sesiones persistentes con Turso cuando cargas `TURSO_DATABASE_URL` y `TURSO_AUTH_TOKEN`.
 
 Recomendado para no perder contexto entre mensajes:
 
 ```env
-UPSTASH_REDIS_REST_URL=pega_tu_url_de_upstash
-UPSTASH_REDIS_REST_TOKEN=pega_tu_token_de_upstash
+TURSO_DATABASE_URL=libsql://tu-db-tu-org.turso.io
+TURSO_AUTH_TOKEN=pega_tu_token_de_turso
+TURSO_SESSION_TABLE=conversation_sessions
 SESSION_STORE_PREFIX=soporte:sessions:
 ```
 

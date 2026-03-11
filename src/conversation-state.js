@@ -1,35 +1,45 @@
-const { Redis } = require("@upstash/redis");
+const { createClient } = require("@libsql/client");
 
 const { isSameProduct } = require("./product-catalog");
 
 const sessionTTLHours = Number(process.env.SESSION_TTL_HOURS || 72);
 const sessionTTLms = Math.max(sessionTTLHours, 1) * 60 * 60 * 1000;
-const sessionTTLSeconds = Math.max(Math.round(sessionTTLms / 1000), 1);
 const sessionHistoryLimit = Number(process.env.SESSION_HISTORY_LIMIT || 12);
 const sessionStorePrefix = String(process.env.SESSION_STORE_PREFIX || "soporte:sessions:").trim();
-const upstashRestUrl = String(process.env.UPSTASH_REDIS_REST_URL || "").trim();
-const upstashRestToken = String(process.env.UPSTASH_REDIS_REST_TOKEN || "").trim();
-const storeBackend = upstashRestUrl && upstashRestToken ? "upstash-redis" : "memory";
+const tursoDatabaseUrl = String(process.env.TURSO_DATABASE_URL || "").trim();
+const tursoAuthToken = String(process.env.TURSO_AUTH_TOKEN || "").trim();
+const tursoSessionTable = normalizeIdentifier(process.env.TURSO_SESSION_TABLE, "conversation_sessions");
+const preferredStoreBackend = tursoDatabaseUrl ? "turso" : "memory";
+const tursoRequiresAuth = preferredStoreBackend === "turso" && !/^file:/i.test(tursoDatabaseUrl);
 
 const sessions = new Map();
-let redisClient = null;
+
+let tursoClient = null;
+let tursoInitPromise = null;
+let tursoFallbackReason = tursoRequiresAuth && !tursoAuthToken ? "TURSO_AUTH_TOKEN faltante" : null;
+let lastTursoCleanupAt = 0;
+let storeWarningLogged = false;
 
 async function startTurn(sessionId, userText) {
-  if (storeBackend === "upstash-redis") {
-    const session = await getOrCreateRemoteSession(sessionId);
-    const nowIso = new Date().toISOString();
+  if (shouldUseTurso()) {
+    try {
+      const session = await getOrCreateTursoSession(sessionId);
+      const nowIso = new Date().toISOString();
 
-    if (userText && String(userText).trim()) {
-      pushMessage(session, {
-        role: "user",
-        text: String(userText).trim(),
-        timestamp: nowIso,
-      });
+      if (userText && String(userText).trim()) {
+        pushMessage(session, {
+          role: "user",
+          text: String(userText).trim(),
+          timestamp: nowIso,
+        });
+      }
+
+      session.updatedAt = nowIso;
+      await saveTursoSession(session);
+      return toSnapshot(session);
+    } catch (error) {
+      disableTurso(error);
     }
-
-    session.updatedAt = nowIso;
-    await saveRemoteSession(session);
-    return toSnapshot(session);
   }
 
   cleanupExpiredSessions();
@@ -50,25 +60,29 @@ async function startTurn(sessionId, userText) {
 }
 
 async function finishTurn(sessionId, assistantText, stateUpdate = {}, meta = {}) {
-  if (storeBackend === "upstash-redis") {
-    const session = await getOrCreateRemoteSession(sessionId);
-    const nowIso = new Date().toISOString();
+  if (shouldUseTurso()) {
+    try {
+      const session = await getOrCreateTursoSession(sessionId);
+      const nowIso = new Date().toISOString();
 
-    applyStateUpdate(session, stateUpdate);
+      applyStateUpdate(session, stateUpdate);
 
-    if (assistantText && String(assistantText).trim()) {
-      pushMessage(session, {
-        role: "assistant",
-        text: String(assistantText).trim(),
-        timestamp: nowIso,
-        meta,
-      });
+      if (assistantText && String(assistantText).trim()) {
+        pushMessage(session, {
+          role: "assistant",
+          text: String(assistantText).trim(),
+          timestamp: nowIso,
+          meta,
+        });
+      }
+
+      session.lastMode = meta.mode || session.lastMode;
+      session.updatedAt = nowIso;
+      await saveTursoSession(session);
+      return toSnapshot(session);
+    } catch (error) {
+      disableTurso(error);
     }
-
-    session.lastMode = meta.mode || session.lastMode;
-    session.updatedAt = nowIso;
-    await saveRemoteSession(session);
-    return toSnapshot(session);
   }
 
   cleanupExpiredSessions();
@@ -94,38 +108,34 @@ async function finishTurn(sessionId, assistantText, stateUpdate = {}, meta = {})
 }
 
 async function updateSessionMetadata(sessionId, metadata = {}) {
-  if (storeBackend === "upstash-redis") {
-    const session = await getOrCreateRemoteSession(sessionId);
-    const allowedKeys = ["kommoContactId", "kommoLeadId", "humanActive"];
-    for (const key of allowedKeys) {
-      if (Object.prototype.hasOwnProperty.call(metadata, key)) {
-        session[key] = metadata[key];
-      }
+  if (shouldUseTurso()) {
+    try {
+      const session = await getOrCreateTursoSession(sessionId);
+      applyAllowedMetadata(session, metadata);
+      session.updatedAt = new Date().toISOString();
+      await saveTursoSession(session);
+      return toSnapshot(session);
+    } catch (error) {
+      disableTurso(error);
     }
-
-    session.updatedAt = new Date().toISOString();
-    await saveRemoteSession(session);
-    return toSnapshot(session);
   }
 
   cleanupExpiredSessions();
 
   const session = getOrCreateMemorySession(sessionId);
-  const allowedKeys = ["kommoContactId", "kommoLeadId", "humanActive"];
-  for (const key of allowedKeys) {
-    if (Object.prototype.hasOwnProperty.call(metadata, key)) {
-      session[key] = metadata[key];
-    }
-  }
-
+  applyAllowedMetadata(session, metadata);
   session.updatedAt = new Date().toISOString();
   return toSnapshot(session);
 }
 
 async function getSessionContext(sessionId) {
-  if (storeBackend === "upstash-redis") {
-    const session = await loadRemoteSession(sessionId);
-    return session ? toSnapshot(session) : null;
+  if (shouldUseTurso()) {
+    try {
+      const session = await loadTursoSession(sessionId);
+      return session ? toSnapshot(session) : null;
+    } catch (error) {
+      disableTurso(error);
+    }
   }
 
   cleanupExpiredSessions();
@@ -134,35 +144,56 @@ async function getSessionContext(sessionId) {
 }
 
 async function resetSession(sessionId) {
-  if (storeBackend === "upstash-redis") {
-    await deleteRemoteSession(sessionId);
-    return;
+  if (shouldUseTurso()) {
+    try {
+      await deleteTursoSession(sessionId);
+      return;
+    } catch (error) {
+      disableTurso(error);
+    }
   }
 
   sessions.delete(String(sessionId || "anonymous"));
 }
 
 async function getSessionStoreInfo() {
-  if (storeBackend === "upstash-redis") {
-    return {
-      backend: storeBackend,
-      persistent: true,
-      activeSessions: null,
-      ttlHours: sessionTTLHours,
-      historyLimit: sessionHistoryLimit,
-      keyPrefix: sessionStorePrefix,
-    };
+  const usingTurso = shouldUseTurso();
+  if (!usingTurso) {
+    cleanupExpiredSessions();
   }
 
-  cleanupExpiredSessions();
   return {
-    backend: storeBackend,
-    persistent: false,
-    activeSessions: sessions.size,
+    backend: usingTurso ? "turso" : "memory",
+    configuredBackend: preferredStoreBackend,
+    persistent: usingTurso,
+    activeSessions: usingTurso ? null : sessions.size,
     ttlHours: sessionTTLHours,
     historyLimit: sessionHistoryLimit,
     keyPrefix: sessionStorePrefix,
+    tableName: preferredStoreBackend === "turso" ? tursoSessionTable : null,
+    fallbackReason: tursoFallbackReason,
   };
+}
+
+function shouldUseTurso() {
+  return preferredStoreBackend === "turso" && !tursoFallbackReason;
+}
+
+function disableTurso(error) {
+  tursoFallbackReason = error?.message || "No pude usar Turso";
+  if (!storeWarningLogged) {
+    console.warn(`Session store fallback a memory: ${tursoFallbackReason}`);
+    storeWarningLogged = true;
+  }
+}
+
+function applyAllowedMetadata(session, metadata) {
+  const allowedKeys = ["kommoContactId", "kommoLeadId", "humanActive"];
+  for (const key of allowedKeys) {
+    if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+      session[key] = metadata[key];
+    }
+  }
 }
 
 function applyStateUpdate(session, stateUpdate) {
@@ -222,52 +253,119 @@ function getOrCreateMemorySession(sessionId) {
   return session;
 }
 
-async function getOrCreateRemoteSession(sessionId) {
-  const existing = await loadRemoteSession(sessionId);
+async function getOrCreateTursoSession(sessionId) {
+  const existing = await loadTursoSession(sessionId);
   return existing || createEmptySession(String(sessionId || "anonymous"));
 }
 
-async function loadRemoteSession(sessionId) {
-  const redis = getRedisClient();
-  const raw = await redis.get(buildSessionKey(sessionId));
-  if (typeof raw !== "string" || !raw.trim()) {
+async function loadTursoSession(sessionId) {
+  const client = await ensureTursoReady();
+  await cleanupExpiredTursoSessionsIfNeeded(client);
+
+  const result = await client.execute({
+    sql: `SELECT payload, expires_at FROM ${tursoSessionTable} WHERE session_id = ? LIMIT 1`,
+    args: [buildSessionKey(sessionId)],
+  });
+
+  const row = Array.isArray(result.rows) && result.rows.length > 0 ? result.rows[0] : null;
+  if (!row) {
+    return null;
+  }
+
+  const expiresAt = parseStoredNumber(row.expires_at);
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    await deleteTursoSession(sessionId);
+    return null;
+  }
+
+  const rawPayload = row.payload == null ? "" : String(row.payload);
+  if (!rawPayload.trim()) {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(raw);
-    return normalizeSession(sessionId, parsed);
+    return normalizeSession(sessionId, JSON.parse(rawPayload));
   } catch (error) {
     console.warn(`No pude parsear sesion remota ${sessionId}: ${error.message}`);
     return null;
   }
 }
 
-async function saveRemoteSession(session) {
-  const redis = getRedisClient();
-  await redis.set(buildSessionKey(session.id), JSON.stringify(normalizeSession(session.id, session)), {
-    ex: sessionTTLSeconds,
+async function saveTursoSession(session) {
+  const client = await ensureTursoReady();
+  const nowMs = Date.now();
+  const expiresAt = nowMs + sessionTTLms;
+
+  await client.execute({
+    sql: `
+      INSERT INTO ${tursoSessionTable} (session_id, payload, updated_at, expires_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        payload = excluded.payload,
+        updated_at = excluded.updated_at,
+        expires_at = excluded.expires_at
+    `,
+    args: [
+      buildSessionKey(session.id),
+      JSON.stringify(normalizeSession(session.id, session)),
+      nowMs,
+      expiresAt,
+    ],
   });
 }
 
-async function deleteRemoteSession(sessionId) {
-  const redis = getRedisClient();
-  await redis.del(buildSessionKey(sessionId));
+async function deleteTursoSession(sessionId) {
+  const client = await ensureTursoReady();
+  await client.execute({
+    sql: `DELETE FROM ${tursoSessionTable} WHERE session_id = ?`,
+    args: [buildSessionKey(sessionId)],
+  });
 }
 
-function getRedisClient() {
-  if (storeBackend !== "upstash-redis") {
-    throw new Error("El store Redis no esta habilitado");
+async function ensureTursoReady() {
+  if (!shouldUseTurso()) {
+    throw new Error("El store Turso no esta habilitado");
   }
 
-  if (!redisClient) {
-    redisClient = new Redis({
-      url: upstashRestUrl,
-      token: upstashRestToken,
+  if (!tursoClient) {
+    tursoClient = createClient({
+      url: tursoDatabaseUrl,
+      ...(tursoAuthToken ? { authToken: tursoAuthToken } : {}),
     });
   }
 
-  return redisClient;
+  if (!tursoInitPromise) {
+    tursoInitPromise = (async () => {
+      await tursoClient.execute(`
+        CREATE TABLE IF NOT EXISTS ${tursoSessionTable} (
+          session_id TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL
+        )
+      `);
+      await tursoClient.execute(`
+        CREATE INDEX IF NOT EXISTS ${tursoSessionTable}_expires_at_idx
+        ON ${tursoSessionTable} (expires_at)
+      `);
+    })();
+  }
+
+  await tursoInitPromise;
+  return tursoClient;
+}
+
+async function cleanupExpiredTursoSessionsIfNeeded(client) {
+  const now = Date.now();
+  if (now - lastTursoCleanupAt < 10 * 60 * 1000) {
+    return;
+  }
+
+  lastTursoCleanupAt = now;
+  await client.execute({
+    sql: `DELETE FROM ${tursoSessionTable} WHERE expires_at <= ?`,
+    args: [now],
+  });
 }
 
 function buildSessionKey(sessionId) {
@@ -369,6 +467,21 @@ function toSnapshot(session) {
       ...session.metrics,
     },
   };
+}
+
+function parseStoredNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function normalizeIdentifier(value, fallback) {
+  const normalized = String(value || fallback || "")
+    .trim()
+    .replace(/[^A-Za-z0-9_]+/g, "_")
+    .replace(/^_+/, "")
+    .replace(/_+$/, "");
+
+  return normalized || fallback;
 }
 
 module.exports = {
