@@ -33,6 +33,7 @@ const kommoWidgetVerifyToken = String(process.env.KOMMO_WIDGET_VERIFY_TOKEN || "
   .toLowerCase() === "true";
 const kommoWidgetSecret = String(process.env.KOMMO_WIDGET_SECRET || "").trim();
 const kommoWidgetContinueTimeoutMs = Number(process.env.KOMMO_WIDGET_CONTINUE_TIMEOUT_MS || 12000);
+const kommoLongLivedToken = String(process.env.KOMMO_LONG_LIVED_TOKEN || "").trim();
 
 const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
 const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -492,8 +493,13 @@ async function sendKommoWidgetContinue(returnUrl, payload) {
     throw new Error("Widget request sin return_url");
   }
 
+  if (!kommoLongLivedToken) {
+    throw new Error("Widget request sin KOMMO_LONG_LIVED_TOKEN para confirmar el bloque");
+  }
+
   await axios.post(returnUrl, payload, {
     headers: {
+      Authorization: `Bearer ${kommoLongLivedToken}`,
       "Content-Type": "application/json",
       Accept: "application/json",
     },
