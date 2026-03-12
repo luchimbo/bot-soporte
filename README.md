@@ -142,6 +142,7 @@ Para Kommo/Salesbot:
 
 - el widget actualizado devuelve la respuesta principal via `{{json.reply}}`, asi que conviene dejar el bloque `Enviar a backend de soporte` sin un saludo manual previo si no queres mensajes duplicados.
 - despues de subir un zip nuevo del widget, reabri el bloque en Salesbot, guardalo y publica otra vez el bot.
+- el bloque queda preparado para seguir conversando en el mismo chat: cada nueva respuesta del cliente vuelve a disparar el backend.
 
 ## 5) Probar local (sin WhatsApp)
 

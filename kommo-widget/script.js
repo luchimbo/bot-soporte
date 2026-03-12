@@ -12,24 +12,17 @@ define(['jquery'], function ($) {
     }
 
     function createWidgetRequestStep(endpointUrl) {
-      var requestData = {
-        message: '{{message_text}}',
-        lead_id: '{{lead.id}}',
-        contact_id: '{{contact.id}}',
-        talk_id: '{{talk_id}}',
-        source: 'kommo_salesbot',
-        render_mode: 'salesbot_show'
+      var widgetRequestHandler = {
+        handler: 'widget_request',
+        params: {
+          url: endpointUrl,
+          data: buildRequestData()
+        }
       };
 
       return {
         question: [
-          {
-            handler: 'widget_request',
-            params: {
-              url: endpointUrl,
-              data: requestData
-            }
-          },
+          widgetRequestHandler,
           {
             handler: 'goto',
             params: {
@@ -42,7 +35,37 @@ define(['jquery'], function ($) {
       };
     }
 
-    function createShowReplyStep() {
+    function buildRequestData() {
+      return {
+        message: '{{message_text}}',
+        lead_id: '{{lead.id}}',
+        contact_id: '{{contact.id}}',
+        talk_id: '{{talk_id}}',
+        source: 'kommo_salesbot',
+        render_mode: 'salesbot_show'
+      };
+    }
+
+    function createWidgetRequestAnswer(endpointUrl) {
+      return [
+        {
+          handler: 'widget_request',
+          params: {
+            url: endpointUrl,
+            data: buildRequestData()
+          }
+        },
+        {
+          handler: 'goto',
+          params: {
+            type: 'question',
+            step: 1
+          }
+        }
+      ];
+    }
+
+    function createShowReplyStep(endpointUrl) {
       return {
         question: [
           {
@@ -53,6 +76,7 @@ define(['jquery'], function ($) {
             }
           }
         ],
+        answer: createWidgetRequestAnswer(endpointUrl),
         require: []
       };
     }
@@ -82,7 +106,7 @@ define(['jquery'], function ($) {
 
         return JSON.stringify([
           createWidgetRequestStep(endpointUrl),
-          createShowReplyStep()
+          createShowReplyStep(endpointUrl)
         ]);
       },
       destroy: function () {
