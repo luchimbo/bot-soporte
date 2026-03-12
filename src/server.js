@@ -34,6 +34,8 @@ const kommoWidgetVerifyToken = String(process.env.KOMMO_WIDGET_VERIFY_TOKEN || "
 const kommoWidgetSecret = String(process.env.KOMMO_WIDGET_SECRET || "").trim();
 const kommoWidgetContinueTimeoutMs = Number(process.env.KOMMO_WIDGET_CONTINUE_TIMEOUT_MS || 12000);
 const kommoLongLivedToken = String(process.env.KOMMO_LONG_LIVED_TOKEN || "").trim();
+const kommoWidgetShowTextLimit = 80;
+const kommoWidgetMaxExecuteHandlers = 10;
 
 const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
 const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -453,23 +455,17 @@ function buildKommoWidgetReturnPayload({
   attempts,
 }) {
   const trimmedReply = limitText(String(replyText || ""), 3900);
-  const executeHandlers = [
-    {
-      handler: "show",
-      params: {
-        type: "text",
-        value: trimmedReply,
-      },
-    },
-  ];
+  const executeHandlers = buildKommoShowTextHandlers(
+    trimmedReply,
+    escalate ? kommoWidgetMaxExecuteHandlers - 1 : kommoWidgetMaxExecuteHandlers
+  );
 
   if (escalate) {
     executeHandlers.push({
       handler: "show",
       params: {
         type: "text",
-        value:
-          "Te paso con un representante humano para seguir con el caso. Ya le comparti todo el contexto.",
+        value: "Te paso con una persona. Ya comparti el contexto del caso.",
       },
     });
   }
@@ -486,6 +482,51 @@ function buildKommoWidgetReturnPayload({
     },
     execute_handlers: executeHandlers,
   };
+}
+
+function buildKommoShowTextHandlers(text, maxHandlers) {
+  return splitKommoReplyText(text, kommoWidgetShowTextLimit, maxHandlers).map((chunk) => ({
+    handler: "show",
+    params: {
+      type: "text",
+      value: chunk,
+    },
+  }));
+}
+
+function splitKommoReplyText(text, maxLength, maxChunks) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return ["No pude generar una respuesta."];
+  }
+
+  const chunks = [];
+  let remaining = normalized;
+
+  while (remaining && chunks.length < maxChunks) {
+    if (remaining.length <= maxLength) {
+      chunks.push(remaining);
+      remaining = "";
+      break;
+    }
+
+    let splitAt = remaining.lastIndexOf(" ", maxLength);
+    if (splitAt < Math.floor(maxLength * 0.5)) {
+      splitAt = maxLength;
+    }
+
+    chunks.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+
+  if (remaining && chunks.length > 0) {
+    const suffix = "...";
+    const lastIndex = chunks.length - 1;
+    const allowedLength = Math.max(maxLength - suffix.length, 1);
+    chunks[lastIndex] = `${chunks[lastIndex].slice(0, allowedLength).trimEnd()}${suffix}`;
+  }
+
+  return chunks.filter(Boolean);
 }
 
 async function sendKommoWidgetContinue(returnUrl, payload) {
