@@ -13,7 +13,8 @@ const {
   getSessionStoreInfo,
   resetSession,
 } = require("./conversation-state");
-const { syncKommoTurn, getKommoStatus } = require("./kommo-client");
+const { syncKommoTurn, getKommoStatus, launchKommoSalesbot } = require("./kommo-client");
+const { claimKommoIncomingMessage } = require("./kommo-webhook-dedupe");
 
 const app = express();
 app.use(express.json());
@@ -28,6 +29,10 @@ const kommoSyncOnSimulate = String(process.env.KOMMO_SYNC_ON_SIMULATE || "false"
 const kommoWidgetEndpointEnabled = String(process.env.KOMMO_WIDGET_ENDPOINT_ENABLED || "true")
   .trim()
   .toLowerCase() === "true";
+const kommoIncomingWebhookEnabled = String(process.env.KOMMO_INCOMING_WEBHOOK_ENABLED || "false")
+  .trim()
+  .toLowerCase() === "true";
+const kommoIncomingWebhookSecret = String(process.env.KOMMO_INCOMING_WEBHOOK_SECRET || "").trim();
 const kommoWidgetVerifyToken = String(process.env.KOMMO_WIDGET_VERIFY_TOKEN || "false")
   .trim()
   .toLowerCase() === "true";
@@ -56,6 +61,10 @@ const runtime = {
   lastKommoWidgetAt: null,
   lastKommoWidgetStatus: "idle",
   lastKommoWidgetError: null,
+  kommoIncomingWebhookEvents: 0,
+  lastKommoIncomingWebhookAt: null,
+  lastKommoIncomingWebhookStatus: "idle",
+  lastKommoIncomingWebhookError: null,
 };
 
 app.get(
@@ -85,6 +94,54 @@ app.get(
       kommo,
       runtime,
     });
+  })
+);
+
+app.post(
+  "/kommo/incoming-message",
+  asyncRoute(async (req, res) => {
+    try {
+      if (!kommoIncomingWebhookEnabled) {
+        return res.sendStatus(404);
+      }
+
+      runtime.kommoIncomingWebhookEvents += 1;
+      runtime.lastKommoIncomingWebhookAt = new Date().toISOString();
+      runtime.lastKommoIncomingWebhookStatus = "received";
+
+      if (!isKommoIncomingWebhookAuthorized(req)) {
+        runtime.lastKommoIncomingWebhookStatus = "forbidden";
+        runtime.lastKommoIncomingWebhookError = "invalid-webhook-secret";
+        return res.sendStatus(403);
+      }
+
+      const messageEvent = extractKommoIncomingMessageEvent(req.body || {});
+      if (!messageEvent) {
+        runtime.lastKommoIncomingWebhookStatus = "ignored-no-message";
+        runtime.lastKommoIncomingWebhookError = null;
+        return res.sendStatus(200);
+      }
+
+      const claimed = await claimKommoIncomingMessage(messageEvent.messageId);
+      if (!claimed) {
+        runtime.lastKommoIncomingWebhookStatus = "duplicate";
+        runtime.lastKommoIncomingWebhookError = null;
+        return res.sendStatus(200);
+      }
+
+      await launchKommoSalesbot({
+        entityId: messageEvent.entityId,
+        entityType: messageEvent.entityType,
+      });
+
+      runtime.lastKommoIncomingWebhookStatus = "salesbot-launched";
+      runtime.lastKommoIncomingWebhookError = null;
+      return res.sendStatus(200);
+    } catch (error) {
+      runtime.lastKommoIncomingWebhookStatus = "error";
+      runtime.lastKommoIncomingWebhookError = formatKommoError(error);
+      throw error;
+    }
   })
 );
 
@@ -876,6 +933,82 @@ function normalizeText(value) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+function isKommoIncomingWebhookAuthorized(req) {
+  if (!kommoIncomingWebhookSecret) {
+    return true;
+  }
+
+  const tokenCandidates = [
+    req.query?.token,
+    req.query?.secret,
+    req.headers?.["x-webhook-token"],
+    req.headers?.["x-kommo-webhook-token"],
+  ];
+
+  return tokenCandidates.some((value) => safeEqual(String(value || "").trim(), kommoIncomingWebhookSecret));
+}
+
+function extractKommoIncomingMessageEvent(payload) {
+  const messageGroups = [payload?.message?.add, payload?.messages?.add, payload?.message?.update];
+  for (const group of messageGroups) {
+    for (const item of toArray(group)) {
+      const messageId = String(item?.id || "").trim();
+      const messageType = String(item?.type || "incoming").trim().toLowerCase();
+      if (!messageId || (messageType && messageType !== "incoming")) {
+        continue;
+      }
+
+      const entityId = parseNumericId(item?.entity_id || item?.element_id);
+      const entityType = normalizeKommoWebhookEntityType(item?.entity_type || item?.element_type);
+      if (!entityId || !entityType) {
+        continue;
+      }
+
+      return {
+        messageId,
+        entityId,
+        entityType,
+        talkId: String(item?.talk_id || "").trim() || null,
+        contactId: parseNumericId(item?.contact_id),
+        text: String(item?.text || "").trim() || null,
+        origin: String(item?.origin || "").trim() || null,
+      };
+    }
+  }
+
+  return null;
+}
+
+function normalizeKommoWebhookEntityType(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (["lead", "leads", "2"].includes(normalized)) {
+    return "leads";
+  }
+
+  if (["contact", "contacts", "1"].includes(normalized)) {
+    return "contacts";
+  }
+
+  return null;
+}
+
+function toArray(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  return Object.keys(value)
+    .sort((left, right) => Number(left) - Number(right))
+    .map((key) => value[key]);
+}
+
 function isGreetingOnlyText(normalizedText) {
   return /^(hola+|holis|buenas|buen dia|buenas tardes|buenas noches|hello|hey|ey)[!.? ]*$/.test(
     String(normalizedText || "").trim()
@@ -943,5 +1076,6 @@ if (require.main === module) {
 module.exports = {
   app,
   handleKommoWidgetRequest,
+  extractKommoIncomingMessageEvent,
   runtime,
 };

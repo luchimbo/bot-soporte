@@ -11,6 +11,10 @@ const kommoPipelineId = parseNumericId(process.env.KOMMO_PIPELINE_ID);
 const kommoStageDiagnosisId = parseNumericId(process.env.KOMMO_STAGE_DIAGNOSIS_ID);
 const kommoStageEscalationId = parseNumericId(process.env.KOMMO_STAGE_ESCALATION_ID);
 const kommoOwnerId = parseNumericId(process.env.KOMMO_OWNER_ID);
+const kommoSalesbotId = parseNumericId(process.env.KOMMO_SALESBOT_ID);
+const kommoIncomingWebhookEnabled = String(process.env.KOMMO_INCOMING_WEBHOOK_ENABLED || "false")
+  .trim()
+  .toLowerCase() === "true";
 
 const leadFieldMap = {
   channel: parseNumericId(process.env.KOMMO_FIELD_CHANNEL_ID),
@@ -37,6 +41,36 @@ function getKommoStatus() {
     stageDiagnosisConfigured: Boolean(kommoStageDiagnosisId),
     stageEscalationConfigured: Boolean(kommoStageEscalationId),
     ownerConfigured: Boolean(kommoOwnerId),
+    salesbotConfigured: Boolean(kommoSalesbotId),
+    incomingWebhookEnabled,
+  };
+}
+
+async function launchKommoSalesbot({ botId, entityId, entityType }) {
+  ensureKommoConfigured();
+
+  const resolvedBotId = parseNumericId(botId) || kommoSalesbotId;
+  const resolvedEntityId = parseNumericId(entityId);
+  const resolvedEntityType = normalizeSalesbotEntityType(entityType);
+
+  if (!resolvedBotId) {
+    throw new Error("Falta KOMMO_SALESBOT_ID para lanzar el Salesbot");
+  }
+
+  if (!resolvedEntityId || !resolvedEntityType) {
+    throw new Error("No pude resolver entity_id/entity_type para lanzar el Salesbot");
+  }
+
+  await apiPost(`/api/v4/bots/${resolvedBotId}/run`, {
+    entity_id: resolvedEntityId,
+    entity_type: resolvedEntityType,
+  });
+
+  return {
+    ok: true,
+    botId: resolvedBotId,
+    entityId: resolvedEntityId,
+    entityType: resolvedEntityType,
   };
 }
 
@@ -689,8 +723,25 @@ function parseNumericId(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function normalizeSalesbotEntityType(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (["lead", "leads", "2"].includes(normalized)) {
+    return "leads";
+  }
+
+  if (["contact", "contacts", "1"].includes(normalized)) {
+    return "contacts";
+  }
+
+  return null;
+}
+
 module.exports = {
   getKommoStatus,
   syncKommoTurn,
+  launchKommoSalesbot,
   fetchKommoAccountSnapshot,
 };

@@ -12,17 +12,15 @@ define(['jquery'], function ($) {
     }
 
     function createWidgetRequestStep(endpointUrl) {
-      var widgetRequestHandler = {
-        handler: 'widget_request',
-        params: {
-          url: endpointUrl,
-          data: buildRequestData()
-        }
-      };
-
       return {
         question: [
-          widgetRequestHandler,
+          {
+            handler: 'widget_request',
+            params: {
+              url: endpointUrl,
+              data: buildRequestData()
+            }
+          },
           {
             handler: 'goto',
             params: {
@@ -46,26 +44,7 @@ define(['jquery'], function ($) {
       };
     }
 
-    function createWidgetRequestAnswer(endpointUrl) {
-      return [
-        {
-          handler: 'widget_request',
-          params: {
-            url: endpointUrl,
-            data: buildRequestData()
-          }
-        },
-        {
-          handler: 'goto',
-          params: {
-            type: 'question',
-            step: 1
-          }
-        }
-      ];
-    }
-
-    function createShowReplyStep(endpointUrl) {
+    function createShowReplyStep() {
       return {
         question: [
           {
@@ -76,7 +55,6 @@ define(['jquery'], function ($) {
             }
           }
         ],
-        answer: createWidgetRequestAnswer(endpointUrl),
         require: []
       };
     }
@@ -106,7 +84,7 @@ define(['jquery'], function ($) {
 
         return JSON.stringify([
           createWidgetRequestStep(endpointUrl),
-          createShowReplyStep(endpointUrl)
+          createShowReplyStep()
         ]);
       },
       destroy: function () {

@@ -47,7 +47,8 @@ https://TU-DOMINIO/kommo/widget-request
 Si Kommo no deja editar ese campo o queda vacio, el widget toma automaticamente la `URL por defecto del backend` configurada a nivel integracion.
 No agregues un saludo manual antes del bloque si queres evitar respuestas duplicadas en el chat.
 Despues de subir un zip nuevo del widget, reabri este bloque, guardalo de nuevo y republica el bot para que tome la version nueva.
-La version nueva del widget deja el bot escuchando la siguiente respuesta del cliente para volver a consultar al backend dentro de la misma conversacion.
+Para el modo mas estable, deja este bot sin depender de `Cualquier conversacion nueva` y relanzalo por webhook con `POST /kommo/incoming-message` en cada mensaje entrante.
+Si ya vas a usar ese webhook, saca el disparador `Cualquier conversacion nueva` para no duplicar el primer mensaje.
 
 Si estas probando local, usar un tunel HTTPS, por ejemplo:
 

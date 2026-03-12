@@ -36,6 +36,8 @@ https://tu-dominio/kommo/widget-request
 
 No subas un zip armado manualmente con la carpeta completa, porque Kommo necesita encontrar `manifest.json` e `i18n/es.json` en la raiz del archivo.
 
+Este widget esta pensado para responder un turno por ejecucion. Para conversaciones mas estables en Kommo, la recomendacion es relanzar el Salesbot en cada mensaje entrante mediante el webhook `POST /kommo/incoming-message`.
+
 ## Datos que envia
 
 El paso envia este payload base a Kommo `widget_request`:
@@ -46,7 +48,8 @@ El paso envia este payload base a Kommo `widget_request`:
   "lead_id": "{{lead.id}}",
   "contact_id": "{{contact.id}}",
   "talk_id": "{{talk_id}}",
-  "source": "kommo_salesbot"
+  "source": "kommo_salesbot",
+  "render_mode": "salesbot_show"
 }
 ```
 

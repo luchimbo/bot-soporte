@@ -142,7 +142,9 @@ Para Kommo/Salesbot:
 
 - el widget actualizado devuelve la respuesta principal via `{{json.reply}}`, asi que conviene dejar el bloque `Enviar a backend de soporte` sin un saludo manual previo si no queres mensajes duplicados.
 - despues de subir un zip nuevo del widget, reabri el bloque en Salesbot, guardalo y publica otra vez el bot.
-- el bloque queda preparado para seguir conversando en el mismo chat: cada nueva respuesta del cliente vuelve a disparar el backend.
+- para un flujo mas solido, conviene relanzar el Salesbot en cada mensaje entrante usando `POST /kommo/incoming-message` + `KOMMO_SALESBOT_ID`, en vez de depender de que el bot quede abierto en la conversacion.
+- la guia operativa de ese rediseño esta en `docs/kommo-incoming-webhook-setup.md`.
+- si activas ese webhook, saca el trigger `Cualquier conversacion nueva` del bot para no dispararlo dos veces.
 
 ## 5) Probar local (sin WhatsApp)
 
