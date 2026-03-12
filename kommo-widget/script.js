@@ -17,7 +17,8 @@ define(['jquery'], function ($) {
         lead_id: '{{lead.id}}',
         contact_id: '{{contact.id}}',
         talk_id: '{{talk_id}}',
-        source: 'kommo_salesbot'
+        source: 'kommo_salesbot',
+        render_mode: 'salesbot_show'
       };
 
       return {
@@ -27,6 +28,28 @@ define(['jquery'], function ($) {
             params: {
               url: endpointUrl,
               data: requestData
+            }
+          },
+          {
+            handler: 'goto',
+            params: {
+              type: 'question',
+              step: 1
+            }
+          }
+        ],
+        require: []
+      };
+    }
+
+    function createShowReplyStep() {
+      return {
+        question: [
+          {
+            handler: 'show',
+            params: {
+              type: 'text',
+              value: '{{json.reply}}'
             }
           }
         ],
@@ -58,7 +81,8 @@ define(['jquery'], function ($) {
         }
 
         return JSON.stringify([
-          createWidgetRequestStep(endpointUrl)
+          createWidgetRequestStep(endpointUrl),
+          createShowReplyStep()
         ]);
       },
       destroy: function () {

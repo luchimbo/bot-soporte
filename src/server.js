@@ -336,6 +336,7 @@ async function handleKommoWidgetRequest(payload) {
   const token = String(payload?.token || "").trim();
   const data = payload?.data || {};
   const returnUrl = String(payload?.return_url || "").trim();
+  const renderMode = String(data?.render_mode || payload?.render_mode || "").trim();
 
   if (kommoWidgetVerifyToken) {
     if (!kommoWidgetSecret) {
@@ -442,6 +443,7 @@ async function handleKommoWidgetRequest(payload) {
       activeProduct: result.activeProduct || updatedSession.currentProduct || null,
       escalate: turnAnalysis.escalate,
       attempts: turnAnalysis.attempts,
+      renderMode,
     })
   );
 }
@@ -453,8 +455,24 @@ function buildKommoWidgetReturnPayload({
   activeProduct,
   escalate,
   attempts,
+  renderMode,
 }) {
   const trimmedReply = limitText(String(replyText || ""), 3900);
+
+  if (renderMode === "salesbot_show") {
+    return {
+      data: {
+        status: "ok",
+        mode: String(mode || "unknown"),
+        intent: String(intent || "consulta_general"),
+        product: String(activeProduct?.name || ""),
+        escalate: escalate ? "1" : "0",
+        attempts: String(Number(attempts || 0)),
+        reply: trimmedReply,
+      },
+    };
+  }
+
   const executeHandlers = buildKommoShowTextHandlers(
     trimmedReply,
     escalate ? kommoWidgetMaxExecuteHandlers - 1 : kommoWidgetMaxExecuteHandlers
@@ -636,6 +654,7 @@ function buildRecipientCandidates(rawTo) {
 function buildTurnAnalysis({ userText, result, sessionSnapshot }) {
   const intent = result?.stateUpdate?.lastIntent || sessionSnapshot?.lastIntent || "consulta_general";
   const normalizedText = normalizeText(userText);
+  const greetingOnly = isGreetingOnlyText(normalizedText);
   const orderNumber =
     extractOrderNumber(userText) || extractLastUserMatch(sessionSnapshot, extractOrderNumber) || null;
   const marketplaceUser =
@@ -649,14 +668,16 @@ function buildTurnAnalysis({ userText, result, sessionSnapshot }) {
       normalizedText
     ) || /representante|asesor|humano|persona|ivan/.test(normalizedText);
   const warrantySignal =
-    /garanti|rma|reemplazo|devolucion|reembolso|falla fisica|defecto/.test(normalizedText) ||
-    intent === "devolucion";
+    !greetingOnly &&
+    (/garanti|rma|reemplazo|devolucion|reembolso|falla fisica|defecto/.test(normalizedText) ||
+      intent === "devolucion");
   const unresolvedSignal =
     /sigue igual|no funcion|no sirve|continua igual|todavia no|aun no|no se solucion/.test(
       normalizedText
     );
 
-  const escalate = explicitHumanRequest || warrantySignal || (unresolvedSignal && attempts >= 2);
+  const escalate =
+    !greetingOnly && (explicitHumanRequest || warrantySignal || (unresolvedSignal && attempts >= 2));
   const urgency = detectUrgency(normalizedText, escalate);
 
   return {
@@ -853,6 +874,12 @@ function normalizeText(value) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+function isGreetingOnlyText(normalizedText) {
+  return /^(hola+|holis|buenas|buen dia|buenas tardes|buenas noches|hello|hey|ey)[!.? ]*$/.test(
+    String(normalizedText || "").trim()
+  );
 }
 
 function limitText(value, maxLength) {

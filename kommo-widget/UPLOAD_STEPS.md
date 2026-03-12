@@ -45,6 +45,8 @@ https://TU-DOMINIO/kommo/widget-request
 ```
 
 Si Kommo no deja editar ese campo o queda vacio, el widget toma automaticamente la `URL por defecto del backend` configurada a nivel integracion.
+No agregues un saludo manual antes del bloque si queres evitar respuestas duplicadas en el chat.
+Despues de subir un zip nuevo del widget, reabri este bloque, guardalo de nuevo y republica el bot para que tome la version nueva.
 
 Si estas probando local, usar un tunel HTTPS, por ejemplo:
 

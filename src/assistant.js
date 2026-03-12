@@ -86,6 +86,7 @@ function getLLMClient() {
 async function buildAssistantReply(userText, options = {}) {
   const text = String(userText || "").trim();
   const sessionContext = options.sessionContext || {};
+  const normalizedText = normalize(text);
 
   if (!text) {
     return {
@@ -94,6 +95,20 @@ async function buildAssistantReply(userText, options = {}) {
       hits: [],
       styleExamples: [],
       stateUpdate: {},
+      activeProduct: sessionContext.currentProduct || null,
+      detectedProduct: null,
+    };
+  }
+
+  if (isGreetingOnly(normalizedText)) {
+    return {
+      text: buildGreetingReply(sessionContext.currentProduct || null),
+      mode: "greeting",
+      hits: [],
+      styleExamples: [],
+      stateUpdate: {
+        lastIntent: "consulta_general",
+      },
       activeProduct: sessionContext.currentProduct || null,
       detectedProduct: null,
     };
@@ -802,6 +817,20 @@ function requiresProductBeforeDiagnosis(normalizedText) {
 
 function isGreeting(normalizedText) {
   return /^(hola|buenas|buen dia|buenas tardes|buenas noches|hello)\b/.test(normalizedText);
+}
+
+function isGreetingOnly(normalizedText) {
+  return /^(hola+|holis|buenas|buen dia|buenas tardes|buenas noches|hello|hey|ey|buen dia equipo|buenas gente)[!.? ]*$/.test(
+    normalizedText
+  );
+}
+
+function buildGreetingReply(activeProduct) {
+  if (activeProduct?.name) {
+    return `Hola. Seguimos con ${activeProduct.name}. Decime que problema tenes.`;
+  }
+
+  return "Hola. Soy soporte tecnico. Decime producto/modelo y que problema tenes.";
 }
 
 function isContinuationMessage(normalizedText) {
