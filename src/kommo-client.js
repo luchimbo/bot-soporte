@@ -42,7 +42,7 @@ function getKommoStatus() {
     stageEscalationConfigured: Boolean(kommoStageEscalationId),
     ownerConfigured: Boolean(kommoOwnerId),
     salesbotConfigured: Boolean(kommoSalesbotId),
-    incomingWebhookEnabled,
+    incomingWebhookEnabled: kommoIncomingWebhookEnabled,
   };
 }
 
