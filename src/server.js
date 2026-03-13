@@ -623,6 +623,7 @@ function buildKommoFinishHandler() {
     handler: "goto",
     params: {
       type: "finish",
+      step: 1,
     },
   };
 }
