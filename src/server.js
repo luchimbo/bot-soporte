@@ -154,6 +154,21 @@ app.post(
       await resetSession(sessionId);
     }
 
+    if (isSessionResetCommand(userText)) {
+      await resetSession(sessionId);
+      return res.status(200).json({
+        reply: buildSessionResetReply(),
+        mode: "session-reset",
+        hits: 0,
+        styleHits: 0,
+        sessionId,
+        activeProduct: null,
+        pendingProductSwitch: null,
+        escalate: false,
+        kommo: null,
+      });
+    }
+
     const sessionContext = await startTurn(sessionId, userText);
     const result = await buildAssistantReply(userText, {
       sessionContext,
@@ -292,6 +307,17 @@ app.post(
         return res.sendStatus(200);
       }
 
+      if (isSessionResetCommand(userText)) {
+        await resetSession(from);
+        await sendWhatsAppText({
+          to: from,
+          body: buildSessionResetReply(),
+          runtime,
+        });
+        runtime.lastWebhookStatus = "session-reset";
+        return res.sendStatus(200);
+      }
+
       console.log(`Mensaje de ${from}: ${userText}`);
       const sessionContext = await startTurn(from, userText);
       const result = await buildAssistantReply(userText, {
@@ -416,6 +442,25 @@ async function handleKommoWidgetRequest(payload) {
     data.phone || data.contact_phone || data.from_phone || data.whatsapp || data.phone_number || ""
   ).trim();
   const sessionId = buildKommoSessionId({ leadId, contactId, data });
+
+  if (isSessionResetCommand(userText)) {
+    await resetSession(sessionId);
+    await sendKommoWidgetContinue(returnUrl, {
+      data: {
+        status: "session-reset",
+      },
+      execute_handlers: [
+        {
+          handler: "show",
+          params: {
+            type: "text",
+            value: buildSessionResetReply(),
+          },
+        },
+      ],
+    });
+    return;
+  }
 
   if (leadId || contactId) {
     await updateSessionMetadata(sessionId, {
@@ -931,6 +976,15 @@ function normalizeText(value) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+function isSessionResetCommand(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  return ["/nuevo", "/nueva", "/reset", "/reiniciar"].includes(normalized);
+}
+
+function buildSessionResetReply() {
+  return "Listo. Borre el contexto anterior. Contame producto/modelo y el problema.";
 }
 
 function isKommoIncomingWebhookAuthorized(req) {
