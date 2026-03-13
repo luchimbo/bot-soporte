@@ -20,6 +20,13 @@ define(['jquery'], function ($) {
               url: endpointUrl,
               data: buildRequestData()
             }
+          },
+          {
+            handler: 'goto',
+            params: {
+              type: 'question',
+              step: 1
+            }
           }
         ],
         require: []
@@ -32,7 +39,43 @@ define(['jquery'], function ($) {
         lead_id: '{{lead.id}}',
         contact_id: '{{contact.id}}',
         talk_id: '{{talk_id}}',
-        source: 'kommo_salesbot'
+        source: 'kommo_salesbot',
+        render_mode: 'salesbot_show'
+      };
+    }
+
+    function createWidgetRequestAnswer(endpointUrl) {
+      return [
+        {
+          handler: 'widget_request',
+          params: {
+            url: endpointUrl,
+            data: buildRequestData()
+          }
+        },
+        {
+          handler: 'goto',
+          params: {
+            type: 'question',
+            step: 1
+          }
+        }
+      ];
+    }
+
+    function createShowReplyStep(endpointUrl) {
+      return {
+        question: [
+          {
+            handler: 'show',
+            params: {
+              type: 'text',
+              value: '{{json.message}}'
+            }
+          }
+        ],
+        answer: createWidgetRequestAnswer(endpointUrl),
+        require: []
       };
     }
 
@@ -60,7 +103,8 @@ define(['jquery'], function ($) {
         }
 
         return JSON.stringify([
-          createWidgetRequestStep(endpointUrl)
+          createWidgetRequestStep(endpointUrl),
+          createShowReplyStep(endpointUrl)
         ]);
       },
       destroy: function () {

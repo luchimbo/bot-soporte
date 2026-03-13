@@ -572,6 +572,7 @@ function buildKommoWidgetReturnPayload({
         product: String(activeProduct?.name || ""),
         escalate: escalate ? "1" : "0",
         attempts: String(Number(attempts || 0)),
+        message: trimmedReply,
         reply: trimmedReply,
       },
     };
@@ -602,6 +603,7 @@ function buildKommoWidgetReturnPayload({
       product: String(activeProduct?.name || ""),
       escalate: escalate ? "1" : "0",
       attempts: String(Number(attempts || 0)),
+      message: trimmedReply,
       reply: trimmedReply,
     },
     execute_handlers: executeHandlers,
