@@ -457,6 +457,7 @@ async function handleKommoWidgetRequest(payload) {
             value: buildSessionResetReply(),
           },
         },
+        buildKommoFinishHandler(),
       ],
     });
     return;
@@ -482,6 +483,7 @@ async function handleKommoWidgetRequest(payload) {
             value: "No recibi texto del cliente. Decime el problema y te ayudo.",
           },
         },
+        buildKommoFinishHandler(),
       ],
     });
     return;
@@ -590,6 +592,8 @@ function buildKommoWidgetReturnPayload({
     });
   }
 
+  executeHandlers.push(buildKommoFinishHandler());
+
   return {
     data: {
       status: "ok",
@@ -612,6 +616,15 @@ function buildKommoShowTextHandlers(text, maxHandlers) {
       value: chunk,
     },
   }));
+}
+
+function buildKommoFinishHandler() {
+  return {
+    handler: "goto",
+    params: {
+      type: "finish",
+    },
+  };
 }
 
 function splitKommoReplyText(text, maxLength, maxChunks) {
