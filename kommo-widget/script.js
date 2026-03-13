@@ -22,9 +22,9 @@ define(['jquery'], function ($) {
             }
           },
           {
-            handler: 'goto',
+            handler: 'wait_answer',
             params: {
-              type: 'question',
+              type: 'answer',
               step: 1
             }
           }
@@ -40,41 +40,28 @@ define(['jquery'], function ($) {
         contact_id: '{{contact.id}}',
         talk_id: '{{talk_id}}',
         source: 'kommo_salesbot',
-        render_mode: 'salesbot_show'
+        render_mode: 'salesbot_loop'
       };
     }
 
-    function createWidgetRequestAnswer(endpointUrl) {
-      return [
-        {
-          handler: 'widget_request',
-          params: {
-            url: endpointUrl,
-            data: buildRequestData()
-          }
-        },
-        {
-          handler: 'goto',
-          params: {
-            type: 'question',
-            step: 1
-          }
-        }
-      ];
-    }
-
-    function createShowReplyStep(endpointUrl) {
+    function createLoopAnswerStep(endpointUrl) {
       return {
-        question: [
+        answer: [
           {
-            handler: 'show',
+            handler: 'widget_request',
             params: {
-              type: 'text',
-              value: '{{json.message}}'
+              url: endpointUrl,
+              data: buildRequestData()
+            }
+          },
+          {
+            handler: 'wait_answer',
+            params: {
+              type: 'answer',
+              step: 1
             }
           }
         ],
-        answer: createWidgetRequestAnswer(endpointUrl),
         require: []
       };
     }
@@ -104,7 +91,7 @@ define(['jquery'], function ($) {
 
         return JSON.stringify([
           createWidgetRequestStep(endpointUrl),
-          createShowReplyStep(endpointUrl)
+          createLoopAnswerStep(endpointUrl)
         ]);
       },
       destroy: function () {

@@ -563,6 +563,25 @@ function buildKommoWidgetReturnPayload({
 }) {
   const trimmedReply = limitText(String(replyText || ""), 3900);
 
+  if (renderMode === "salesbot_loop") {
+    return {
+      data: {
+        status: "ok",
+        mode: String(mode || "unknown"),
+        intent: String(intent || "consulta_general"),
+        product: String(activeProduct?.name || ""),
+        escalate: escalate ? "1" : "0",
+        attempts: String(Number(attempts || 0)),
+        message: trimmedReply,
+        reply: trimmedReply,
+      },
+      execute_handlers: buildKommoShowTextHandlers(
+        trimmedReply,
+        escalate ? kommoWidgetMaxExecuteHandlers - 1 : kommoWidgetMaxExecuteHandlers
+      ),
+    };
+  }
+
   if (renderMode === "salesbot_show") {
     return {
       data: {
