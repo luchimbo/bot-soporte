@@ -28,3 +28,9 @@
   to = "/.netlify/functions/api/kommo/widget-request"
   status = 200
   force = true
+
+[[redirects]]
+  from = "/kommo/incoming-message"
+  to = "/.netlify/functions/api/kommo/incoming-message"
+  status = 200
+  force = true
