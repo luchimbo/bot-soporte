@@ -107,6 +107,47 @@ Nota: para indexar PDF se usa el binario `pdftotext` (Poppler). Si no esta dispo
 npm start
 ```
 
+`npm start` ahora levanta el runtime nuevo de `Chat SDK + WhatsApp + Redis`.
+Si necesitas volver temporalmente al servidor legado con Kommo/Salesbot, usa:
+
+```bash
+npm run start:legacy
+```
+
+## Runtime nuevo con Chat SDK + Redis
+
+Para el flujo recomendado de conversacion continua por WhatsApp, usar `src/server-chat.mjs`.
+
+Variables extra:
+
+```env
+REDIS_URL=redis://...
+WHATSAPP_VERIFY_TOKEN=...
+WHATSAPP_ACCESS_TOKEN=...
+WHATSAPP_PHONE_NUMBER_ID=...
+WHATSAPP_APP_SECRET=...
+WHATSAPP_BOT_USERNAME=whatsapp-bot
+```
+
+Comando:
+
+```bash
+npm run start:chat
+```
+
+Webhook de Meta:
+
+```text
+GET/POST https://TU-DOMINIO/api/webhooks/whatsapp
+```
+
+Este runtime usa:
+
+- `Chat SDK` para el loop multi-turno
+- `Redis` para suscripciones, locks y dedupe
+- `Turso` para el contexto conversacional de soporte
+- `Kommo` solo para sync CRM
+
 ## Deploy en Netlify con contexto conversacional
 
 Para Netlify, este proyecto ya incluye:
