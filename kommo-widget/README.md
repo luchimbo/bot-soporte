@@ -48,8 +48,7 @@ El paso envia este payload base a Kommo `widget_request`:
   "lead_id": "{{lead.id}}",
   "contact_id": "{{contact.id}}",
   "talk_id": "{{talk_id}}",
-  "source": "kommo_salesbot",
-  "render_mode": "salesbot_show"
+  "source": "kommo_salesbot"
 }
 ```
 
