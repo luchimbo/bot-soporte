@@ -20,6 +20,14 @@ export async function forwardChatSdkWebhook({ req, res, handler }) {
       },
     });
 
+    const responseBodyPreview = await readResponsePreview(response);
+    if (!response.ok) {
+      updateChatRuntime({
+        lastWebhookStatus: `response-${response.status}`,
+        lastError: responseBodyPreview || `webhook-response-${response.status}`,
+      });
+    }
+
     await writeFetchResponse(res, response);
   } catch (error) {
     updateChatRuntime({
@@ -30,6 +38,16 @@ export async function forwardChatSdkWebhook({ req, res, handler }) {
       ok: false,
       error: "chat_webhook_bridge_error",
     });
+  }
+}
+
+async function readResponsePreview(response) {
+  try {
+    const clone = response.clone();
+    const text = (await clone.text()).trim();
+    return text ? text.slice(0, 200) : null;
+  } catch {
+    return null;
   }
 }
 

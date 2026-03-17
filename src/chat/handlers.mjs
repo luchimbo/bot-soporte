@@ -6,9 +6,9 @@ export function registerBotHandlers(bot) {
     return;
   }
 
-  bot.onNewMessage(/[\s\S]+/, async (thread, message) => {
+  bot.onDirectMessage(async (thread, message) => {
     await thread.subscribe();
-    await processInboundTurn(thread, message, "new-message");
+    await processInboundTurn(thread, message, "direct-message");
   });
 
   bot.onSubscribedMessage(async (thread, message) => {
