@@ -65,6 +65,7 @@ const resolutionYesPattern = /^(si|sí|perfecto|listo|resuelto|solucionado|ya fu
 const resolutionNoPattern = /^(no|sigue|sigue igual|no funciono|no funcionó|no pude|continua|continúa|todavia no|aun no|persiste)([!. ]|$)/i;
 
 const productOwnershipCuePattern = /\b(tengo|mi|es un|es una|modelo|sku|arturia|midiplus|teclado|interfaz|bateria|bater[aí]a|controlador)\b/i;
+const accessoryLikeProductPattern = /\b(fuente|cable|stand|soporte|adaptador|holder|pedal|music stand)\b/i;
 
 let llmClient = null;
 let llmClientSignature = null;
@@ -500,6 +501,22 @@ function resolveProductForTurn(text, sessionContext) {
   const detectedProduct = detectedMention?.product || null;
 
   if (pendingProductSwitch) {
+    if (
+      detectedProduct &&
+      currentProduct &&
+      isAccessoryLikeProduct(currentProduct) &&
+      !isAccessoryLikeProduct(detectedProduct) &&
+      isExplicitProductSelection(normalizedText, detectedMention)
+    ) {
+      stateUpdate.currentProduct = detectedProduct;
+      stateUpdate.clearPendingProductSwitch = true;
+      return {
+        activeProduct: detectedProduct,
+        detectedProduct,
+        stateUpdate,
+      };
+    }
+
     if (indicatesKeepCurrent(normalizedText) && currentProduct) {
       stateUpdate.clearPendingProductSwitch = true;
       return {
@@ -588,6 +605,21 @@ function resolveProductForTurn(text, sessionContext) {
       };
     }
 
+    if (
+      currentProduct &&
+      isAccessoryLikeProduct(currentProduct) &&
+      !isAccessoryLikeProduct(detectedProduct) &&
+      isExplicitProductSelection(normalizedText, detectedMention)
+    ) {
+      stateUpdate.currentProduct = detectedProduct;
+      stateUpdate.clearPendingProductSwitch = true;
+      return {
+        activeProduct: detectedProduct,
+        detectedProduct,
+        stateUpdate,
+      };
+    }
+
     if (shouldSwitchProduct(normalizedText, detectedMention)) {
       stateUpdate.currentProduct = detectedProduct;
       stateUpdate.clearPendingProductSwitch = true;
@@ -654,6 +686,15 @@ function shouldSwitchProduct(normalizedText, detectedMention) {
   }
 
   return false;
+}
+
+function isAccessoryLikeProduct(product) {
+  const normalizedName = normalize(product?.normalizedName || product?.name || "");
+  if (!normalizedName) {
+    return false;
+  }
+
+  return accessoryLikeProductPattern.test(normalizedName);
 }
 
 function buildRetrievalQuery({ userText, sessionContext, activeProduct }) {
