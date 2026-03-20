@@ -190,6 +190,21 @@ async function buildAssistantReply(userText, options = {}) {
     stateUpdate.currentProduct = activeProduct;
   }
 
+  if (activeProduct && looksLikeProductOnlyMessage(normalizedText, activeProduct)) {
+    return {
+      text: maybePrependSupportIntro(
+        `Perfecto, trabajemos sobre ${activeProduct.name}. Decime que problema tenes y desde cuando ocurre.`,
+        hasAssistantHistory
+      ),
+      mode: "needs-problem-detail",
+      hits: [],
+      styleExamples: [],
+      stateUpdate,
+      activeProduct,
+      detectedProduct: productResolution.detectedProduct,
+    };
+  }
+
   const retrievalQuery = buildRetrievalQuery({
     userText: text,
     sessionContext,
@@ -1010,6 +1025,31 @@ function selectModelForTurn({ activeProduct, hits, styleExamples, preferredCateg
 
 function hasStrongAnswerCandidate(hits) {
   return Array.isArray(hits) && hits.length > 0 && Number(hits[0]?.score || 0) >= 9.5;
+}
+
+function hasProblemSignal(normalizedText) {
+  return /\b(no funciona|no anda|falla|error|no enciende|no conecta|sigue igual|persiste|no suena|no sale sonido|no detecta|no reconoce|problema|inconveniente)\b/.test(
+    String(normalizedText || "")
+  );
+}
+
+function looksLikeProductOnlyMessage(normalizedText, activeProduct) {
+  if (!activeProduct || hasProblemSignal(normalizedText)) {
+    return false;
+  }
+
+  const text = String(normalizedText || "").trim();
+  if (!text) {
+    return false;
+  }
+
+  const activeName = normalize(activeProduct.normalizedName || activeProduct.name || "");
+  if (activeName && text === activeName) {
+    return true;
+  }
+
+  const compactTokens = tokenizeNormalizedText(text).filter((token) => token.length >= 3);
+  return compactTokens.length <= 4 && hasExplicitProductOwnershipCue(text);
 }
 
 function buildFaqPlaybookResponse({ faqMatch, activeProduct, stateUpdate, hasAssistantHistory, detectedProduct }) {
