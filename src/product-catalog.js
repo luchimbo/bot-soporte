@@ -89,6 +89,18 @@ const conversationNoiseTokens = new Set([
   "necesito",
 ]);
 
+const accessoryLikeTokens = new Set([
+  "fuente",
+  "cable",
+  "soporte",
+  "stand",
+  "holder",
+  "adaptador",
+  "pedal",
+  "music",
+  "power",
+]);
+
 const confidenceRank = {
   low: 1,
   medium: 2,
@@ -121,6 +133,7 @@ function detectProductMention(text, options = {}) {
   const specificTokens = tokens.filter((token) => isSpecificCatalogToken(token, catalog.tokenCounts));
   const queryVariantTokens = new Set(tokens.filter((token) => isVariantToken(token)));
   const queryNumberTokens = new Set(extractNumberTokens(normalizedText));
+  const queryAccessoryTokens = new Set(tokens.filter((token) => accessoryLikeTokens.has(token)));
 
   if (tokenSet.size === 0 && specificTokens.length === 0 && !hasPotentialSku(normalizedText)) {
     return null;
@@ -133,10 +146,11 @@ function detectProductMention(text, options = {}) {
       normalizedText,
       compactText,
       tokenSet,
-      specificTokens,
-      queryVariantTokens,
-      queryNumberTokens,
-    });
+        specificTokens,
+        queryVariantTokens,
+        queryNumberTokens,
+        queryAccessoryTokens,
+      });
 
     if (match) {
       matches.push(match);
@@ -311,6 +325,11 @@ function loadCatalog() {
       name,
       normalizedName,
       tokens,
+      isAccessoryLike: isAccessoryLikeProduct({
+        normalizedName,
+        rubro: cleanText(row.Rubro || row.rubro || ""),
+        subRubro: cleanText(row["Sub Rubro"] || row.sub_rubro || row.subRubro || ""),
+      }),
     });
   }
 
@@ -376,6 +395,7 @@ function scoreProductMatch({
   specificTokens,
   queryVariantTokens,
   queryNumberTokens,
+  queryAccessoryTokens,
 }) {
   let score = 0;
   let specificHits = 0;
@@ -441,6 +461,7 @@ function scoreProductMatch({
 
   score += scoreVariantAlignment(product, queryVariantTokens);
   score += scoreNumberAlignment(product, queryNumberTokens);
+  score += scoreAccessoryAlignment(product, queryAccessoryTokens, normalizedText);
 
   if (queryVariantTokens.size > 0 && product.variantTokens.length === 0) {
     score -= 3;
@@ -455,6 +476,22 @@ function scoreProductMatch({
     score,
     specificHits,
   };
+}
+
+function scoreAccessoryAlignment(product, queryAccessoryTokens, normalizedText) {
+  if (!product.isAccessoryLike) {
+    return 0;
+  }
+
+  if (normalizedText.includes(product.normalizedName) || (product.skuNorm && normalizedText.replace(/\s+/g, "").includes(product.skuNorm))) {
+    return 4;
+  }
+
+  if (!queryAccessoryTokens || queryAccessoryTokens.size === 0) {
+    return -8;
+  }
+
+  return 0;
 }
 
 function classifyConfidence(score, gap, specificHits) {
@@ -794,6 +831,16 @@ function cleanText(value) {
     .replace(/[\r\n\t]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isAccessoryLikeProduct({ normalizedName, rubro, subRubro }) {
+  const categoryText = normalize(`${rubro} ${subRubro}`);
+  if (/accesor|cable/.test(categoryText)) {
+    return true;
+  }
+
+  const tokens = tokenize(normalizedName);
+  return tokens.some((token) => accessoryLikeTokens.has(token));
 }
 
 function buildFamilyKey(normalizedName) {

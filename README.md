@@ -27,6 +27,14 @@ Variables utiles:
 - `MOCK_WHATSAPP_SEND=true`: no envia a Meta, solo simula.
 - `KNOWLEDGE_BASE_FILE=data/knowledge-base.json`: salida de base local.
 - `PRODUCT_CATALOG_FILE=archivos/Productos.xlsx`: catalogo para bloquear producto en chat.
+- `SUPPORT_PLAYBOOK_FILE=archivos/SoporteBot.xlsx`: workbook con `faq_respuestas`, `triage_humano` y `politicas_bot`.
+- `LLM_SIMPLE_MODEL` / `LLM_COMPLEX_MODEL`: permite rutear consultas simples a un modelo barato y troubleshooting tecnico a uno mas capaz.
+
+El playbook de soporte se usa asi:
+
+- `faq_respuestas`: FAQs aprobadas y links oficiales
+- `triage_humano`: mensajes/datos obligatorios cuando el caso pasa a una persona
+- `politicas_bot`: presentacion del bot, horario humano y restricciones operativas
 - `PRODUCT_MATCH_MIN_SCORE`: sensibilidad del matcher de productos.
 - `SESSION_TTL_HOURS` / `SESSION_HISTORY_LIMIT`: memoria conversacional por telefono.
 - `SESSION_STORE_PREFIX`: prefijo de claves para sesiones persistentes.

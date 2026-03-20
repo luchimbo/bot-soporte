@@ -6,12 +6,21 @@ const {
   buildProductSearchContext,
   isSameProduct,
 } = require("./product-catalog");
+const {
+  searchSupportFaq,
+  findSupportTriageConfig,
+  matchSupportTriage,
+  getSupportPolicyText,
+  getSupportPolicyTextsByType,
+} = require("./support-playbook");
 
 const topK = Number(process.env.KB_TOP_K || 4);
 const styleTopK = Number(process.env.STYLE_TOP_K || 3);
 const manualTopK = Number(process.env.KB_MANUAL_TOP_K || 2);
 const openAITimeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
 const productMinMatchScore = Number(process.env.PRODUCT_MATCH_MIN_SCORE || 7);
+const llmSimpleModelFallback = process.env.LLM_SIMPLE_MODEL || process.env.OPENROUTER_SIMPLE_MODEL || "google/gemini-2.5-flash-lite";
+const llmComplexModelFallback = process.env.LLM_COMPLEX_MODEL || process.env.OPENROUTER_COMPLEX_MODEL || "deepseek/deepseek-v3.2";
 
 const productClarifyCosmeticTokens = new Set([
   "black",
@@ -50,10 +59,7 @@ const productVariantHintTokens = new Set([
   "go",
 ]);
 
-const supportGreetingPrefix = [
-  "Hola. Soy un asistente virtual de soporte de PC MIDI Center.",
-  "Si hace falta intervencion humana, el equipo responde de 9 a 14 hs.",
-].join("\n");
+const supportGreetingPrefix = buildSupportGreetingPrefix();
 
 const resolutionYesPattern = /^(si|sí|perfecto|listo|resuelto|solucionado|ya funciono|ya funcionó|ya pude|quedo|qued[oó] bien|anda|funciona)([!. ]|$)/i;
 const resolutionNoPattern = /^(no|sigue|sigue igual|no funciono|no funcionó|no pude|continua|continúa|todavia no|aun no|persiste)([!. ]|$)/i;
@@ -72,6 +78,8 @@ function getLLMClient() {
   const signature = JSON.stringify({
     provider: config.provider,
     model: config.model,
+    simpleModel: config.simpleModel,
+    complexModel: config.complexModel,
     baseURL: config.baseURL || "",
     hasReferer: Boolean(config.defaultHeaders?.["HTTP-Referer"]),
     hasTitle: Boolean(config.defaultHeaders?.["X-Title"]),
@@ -135,6 +143,16 @@ async function buildAssistantReply(userText, options = {}) {
     };
   }
 
+  if (containsAbusiveLanguage(normalizedText)) {
+    return buildHumanTriageResponse({
+      route: "trato_abusivo",
+      activeProduct: sessionContext.currentProduct || null,
+      stateUpdate: {},
+      hasAssistantHistory,
+      detectedProduct: null,
+    });
+  }
+
   const productResolution = resolveProductForTurn(text, sessionContext);
   const stateUpdate = {
     ...productResolution.stateUpdate,
@@ -176,6 +194,23 @@ async function buildAssistantReply(userText, options = {}) {
     sessionContext,
     activeProduct,
   });
+
+  const faqHits = searchSupportFaq({
+    userText: text,
+    activeProduct,
+    preferredCategory: detectIntentFromText(text),
+    topK: 2,
+  });
+
+  if (faqHits.length > 0) {
+    return buildFaqPlaybookResponse({
+      faqMatch: faqHits[0],
+      activeProduct,
+      stateUpdate,
+      hasAssistantHistory,
+      detectedProduct: productResolution.detectedProduct,
+    });
+  }
 
   const historicalHits = searchKnowledgeBase(retrievalQuery, topK, {
     productContext,
@@ -268,9 +303,18 @@ async function buildAssistantReply(userText, options = {}) {
   }
 
   try {
+    const selectedModel = selectModelForTurn({
+      activeProduct,
+      hits,
+      styleExamples,
+      preferredCategory,
+      normalizedText,
+      llmConfig: llm.config,
+    });
+
     const aiReply = await generateAIReply({
       client: llm.client,
-      model: llm.config.model,
+      model: selectedModel,
       userText: text,
       sessionContext,
       activeProduct,
@@ -400,6 +444,7 @@ async function generateAIReply({
     activeProduct
       ? "- Producto bloqueado para este chat: mantenete en ese producto y no cambies a otro modelo."
       : "- Si no hay producto confirmado, pedi producto/modelo antes de diagnosticar.",
+    ...getSupportPolicyTextsByType("restriccion").map((text) => `- ${text}`),
   ].join("\n");
 
   const userPrompt = [
@@ -867,6 +912,18 @@ function buildHumanTriageResponse({ route, activeProduct, stateUpdate, hasAssist
 }
 
 function detectImmediateHumanRoute({ normalizedText, preferredCategory, hits }) {
+  if (containsAbusiveLanguage(normalizedText)) {
+    return "trato_abusivo";
+  }
+
+  const playbookMatch = matchSupportTriage({
+    normalizedText,
+    preferredCategory,
+  });
+  if (playbookMatch?.category) {
+    return playbookMatch.category;
+  }
+
   if (/equivoc|envio incorrecto|producto equivocado|me llego otro|llego otro|enviaste otro|pedido incorrecto/.test(normalizedText)) {
     return "equivocacion_envio";
   }
@@ -882,8 +939,74 @@ function detectImmediateHumanRoute({ normalizedText, preferredCategory, hits }) 
   return null;
 }
 
+function selectModelForTurn({ activeProduct, hits, styleExamples, preferredCategory, normalizedText, llmConfig }) {
+  if (!llmConfig) {
+    return null;
+  }
+
+  if (!activeProduct) {
+    return llmConfig.simpleModel || llmConfig.model;
+  }
+
+  if (isSensitiveHumanRoute(normalizedText, preferredCategory)) {
+    return llmConfig.simpleModel || llmConfig.model;
+  }
+
+  const hasManualEvidence = Array.isArray(hits) && hits.some((hit) => String(hit?.source || "").startsWith("manual_"));
+  const hasStrongFaqStyle = Array.isArray(styleExamples) && styleExamples.length > 0;
+  const hitScore = Number(hits?.[0]?.score || 0);
+
+  if (hasManualEvidence && hitScore >= 6) {
+    return llmConfig.complexModel || llmConfig.model;
+  }
+
+  if ((preferredCategory === "falla_producto" || preferredCategory === "como_hacer") && hitScore >= 8 && hasStrongFaqStyle) {
+    return llmConfig.complexModel || llmConfig.model;
+  }
+
+  return llmConfig.simpleModel || llmConfig.model;
+}
+
 function hasStrongAnswerCandidate(hits) {
   return Array.isArray(hits) && hits.length > 0 && Number(hits[0]?.score || 0) >= 9.5;
+}
+
+function buildFaqPlaybookResponse({ faqMatch, activeProduct, stateUpdate, hasAssistantHistory, detectedProduct }) {
+  const nextStateUpdate = {
+    ...stateUpdate,
+    humanActive: false,
+    lastIntent: faqMatch.intent || faqMatch.category,
+  };
+
+  if (faqMatch.askIfResolved) {
+    nextStateUpdate.supportFlow = {
+      stage: "awaiting_resolution_check",
+      intent: faqMatch.intent || faqMatch.category,
+      handoffRoute: faqMatch.unresolvedAction || "falla_producto",
+      source: "playbook-faq",
+      faqId: faqMatch.id,
+    };
+  }
+
+  const parts = [faqMatch.approvedAnswer];
+  if (faqMatch.supportLink) {
+    parts.push(`Link de ayuda: ${faqMatch.supportLink}`);
+  }
+
+  let replyText = maybePrependSupportIntro(parts.join("\n"), hasAssistantHistory);
+  if (faqMatch.askIfResolved) {
+    replyText = appendResolutionCheck(replyText);
+  }
+
+  return {
+    text: replyText,
+    mode: "faq-playbook",
+    hits: [],
+    styleExamples: [],
+    stateUpdate: nextStateUpdate,
+    activeProduct,
+    detectedProduct,
+  };
 }
 
 function resolveHandoffRoute(preferredCategory, normalizedText) {
@@ -1202,7 +1325,37 @@ function appendResolutionCheck(replyText) {
 }
 
 function buildHumanTriageReply({ route, activeProduct }) {
+  const playbookConfig = findSupportTriageConfig(route);
+  if (playbookConfig) {
+    const restrictionRule =
+      route === "equivocacion_envio"
+        ? "no_confirmar_envio"
+        : route === "devolucion" || route === "garantia_consulta" || route === "falla_producto"
+          ? "no_confirmar_garantia"
+          : null;
+
+    return [
+      activeProduct?.name ? `Producto en seguimiento: ${activeProduct.name}.` : null,
+      playbookConfig.initialMessage || null,
+      playbookConfig.dataRequestMessage || null,
+      playbookConfig.humanCloseMessage || null,
+      restrictionRule ? getSupportPolicyText(restrictionRule, null) : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
   const productLine = activeProduct?.name ? `Producto en seguimiento: ${activeProduct.name}.` : null;
+
+  if (route === "trato_abusivo") {
+    return [
+      productLine,
+      "Voy a derivar el caso a una persona del equipo para continuar la atencion.",
+      "Nuestro equipo humano responde de 9 a 14 hs.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
 
   if (route === "equivocacion_envio") {
     return [
@@ -1262,6 +1415,25 @@ function hasStrongProductCue(normalizedText) {
   );
 
   return tokens.some((token) => /\d/.test(token)) || tokens.length >= 2;
+}
+
+function containsAbusiveLanguage(normalizedText) {
+  return /\b(pelotudo|pelotuda|boludo|boluda|idiota|imbecil|imbec[ií]l|forro|forra|tarado|tarada|mogolico|mogolica|hijo de puta|hdp|concha de tu madre|puta madre|chupame un huevo|loco de mierda)\b/.test(
+    String(normalizedText || "")
+  );
+}
+
+function buildSupportGreetingPrefix() {
+  const intro = getSupportPolicyText(
+    "presentacion_bot",
+    "Hola. Soy un asistente virtual de soporte de PC MIDI Center."
+  );
+  const humanHours = getSupportPolicyText(
+    "horario_humano",
+    "Si hace falta intervencion humana, el equipo responde de 9 a 14 hs."
+  );
+
+  return [intro, humanHours].filter(Boolean).join("\n");
 }
 
 function isExplicitProductSelection(normalizedText, detectedMention) {
@@ -1579,6 +1751,8 @@ function resolveLLMConfig() {
       apiKey: process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || "",
       model:
         genericModel || process.env.OPENROUTER_MODEL || process.env.OPENAI_MODEL || "moonshotai/kimi-k2",
+      simpleModel: llmSimpleModelFallback,
+      complexModel: llmComplexModelFallback,
       baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
       defaultHeaders: Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined,
     };
@@ -1588,6 +1762,8 @@ function resolveLLMConfig() {
     provider: "openai",
     apiKey: process.env.OPENAI_API_KEY || "",
     model: genericModel || process.env.OPENAI_MODEL || "gpt-4o-mini",
+    simpleModel: process.env.LLM_SIMPLE_MODEL || process.env.OPENAI_SIMPLE_MODEL || genericModel || process.env.OPENAI_MODEL || "gpt-4o-mini",
+    complexModel: process.env.LLM_COMPLEX_MODEL || process.env.OPENAI_COMPLEX_MODEL || genericModel || process.env.OPENAI_MODEL || "gpt-4o-mini",
     baseURL: process.env.OPENAI_BASE_URL || undefined,
     defaultHeaders: undefined,
   };
@@ -1600,6 +1776,8 @@ function getLLMStatus() {
   return {
     provider: config.provider,
     model: config.model,
+    simpleModel: config.simpleModel,
+    complexModel: config.complexModel,
     modelSource,
     enabled: Boolean(config.apiKey),
   };

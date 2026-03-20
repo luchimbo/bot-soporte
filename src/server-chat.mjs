@@ -14,6 +14,7 @@ const { getKnowledgeBaseInfo } = require("./knowledge-base.js");
 const { getProductCatalogInfo } = require("./product-catalog.js");
 const { getSessionStoreInfo } = require("./conversation-state.js");
 const { getKommoStatus } = require("./kommo-client.js");
+const { getSupportPlaybookInfo } = require("./support-playbook.js");
 
 const port = Number(process.env.PORT || 3000);
 const app = express();
@@ -41,6 +42,7 @@ app.get("/health", async (_req, res) => {
   const llm = getLLMStatus();
   const knowledgeBase = getKnowledgeBaseInfo();
   const productCatalog = getProductCatalogInfo();
+  const supportPlaybook = getSupportPlaybookInfo();
   const sessions = await getSessionStoreInfo();
   const kommo = getKommoStatus();
 
@@ -51,6 +53,7 @@ app.get("/health", async (_req, res) => {
     llm,
     knowledgeBase,
     productCatalog,
+    supportPlaybook,
     sessions,
     whatsapp: {
       mockSend: String(process.env.MOCK_WHATSAPP_SEND || "false").trim().toLowerCase() === "true",

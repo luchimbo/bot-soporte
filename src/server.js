@@ -16,6 +16,7 @@ const {
 const { syncKommoTurn, getKommoStatus, launchKommoSalesbot } = require("./kommo-client");
 const { claimKommoIncomingMessage } = require("./kommo-webhook-dedupe");
 const { buildTurnAnalysis } = require("./turn-analysis");
+const { getSupportPlaybookInfo } = require("./support-playbook");
 
 const app = express();
 app.use(express.json());
@@ -74,6 +75,7 @@ app.get(
     const kbInfo = getKnowledgeBaseInfo();
     const llm = getLLMStatus();
     const catalog = getProductCatalogInfo();
+    const supportPlaybook = getSupportPlaybookInfo();
     const sessions = await getSessionStoreInfo();
     const whatsapp = {
       mockSend,
@@ -90,6 +92,7 @@ app.get(
       llm,
       knowledgeBase: kbInfo,
       productCatalog: catalog,
+      supportPlaybook,
       sessions,
       whatsapp,
       kommo,
