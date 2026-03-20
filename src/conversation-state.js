@@ -209,6 +209,14 @@ function applyStateUpdate(session, stateUpdate) {
     session.pendingProductSwitch = stateUpdate.pendingProductSwitch || null;
   }
 
+  if (stateUpdate.clearSupportFlow) {
+    session.supportFlow = null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(stateUpdate, "supportFlow")) {
+    session.supportFlow = stateUpdate.supportFlow || null;
+  }
+
   if (Object.prototype.hasOwnProperty.call(stateUpdate, "currentProduct")) {
     const previousProduct = session.currentProduct;
     const nextProduct = stateUpdate.currentProduct || null;
@@ -379,6 +387,7 @@ function createEmptySession(sessionId, nowIso = new Date().toISOString()) {
     updatedAt: nowIso,
     currentProduct: null,
     pendingProductSwitch: null,
+    supportFlow: null,
     lastIntent: null,
     lastMode: null,
     kommoContactId: null,
@@ -416,6 +425,7 @@ function normalizeSession(sessionId, candidate) {
     updatedAt: String(candidate.updatedAt || fallback.updatedAt),
     currentProduct: candidate.currentProduct || null,
     pendingProductSwitch: candidate.pendingProductSwitch || null,
+    supportFlow: candidate.supportFlow && typeof candidate.supportFlow === "object" ? candidate.supportFlow : null,
     lastIntent: candidate.lastIntent || null,
     lastMode: candidate.lastMode || null,
     kommoContactId: candidate.kommoContactId || null,
@@ -457,6 +467,7 @@ function toSnapshot(session) {
     updatedAt: session.updatedAt,
     currentProduct: session.currentProduct,
     pendingProductSwitch: session.pendingProductSwitch,
+    supportFlow: session.supportFlow,
     lastIntent: session.lastIntent,
     lastMode: session.lastMode,
     kommoContactId: session.kommoContactId,

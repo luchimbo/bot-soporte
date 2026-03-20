@@ -8,28 +8,30 @@ function normalize(input = "") {
 
 function buildSupportReply(userText) {
   const text = normalize(userText);
+  const intro =
+    "Soy un asistente virtual de soporte de PC MIDI Center. Si hace falta intervencion humana, el equipo responde de 9 a 14 hs.";
 
   if (!text) {
-    return "Te ayudo con soporte tecnico. Contame producto y problema para empezar.";
+    return `${intro} Contame producto/modelo y problema para empezar.`;
   }
 
   if (/(hola|buenas|buen dia|hello)/.test(text)) {
-    return "Hola. Soy tu asistente de soporte. Decime producto y que esta pasando.";
+    return `${intro} Decime producto/modelo y que esta pasando.`;
   }
 
   if (/(devolucion|devolver|reembolso|cambio|garantia)/.test(text)) {
-    return "Te guio con la devolucion. Pasame producto, fecha de compra y si tenes comprobante. Con eso te digo los pasos exactos.";
+    return `${intro} Este tipo de caso necesita revision humana. Pasame producto, fecha de compra y comprobante para dejarlo listo.`;
   }
 
   if (/(no funciona|no anda|falla|error|no enciende|no conecta|problema)/.test(text)) {
-    return "Vamos paso a paso. 1) Decime producto/modelo. 2) Que mensaje de error ves (si aparece). 3) Desde cuando pasa. Con eso te doy una solucion concreta.";
+    return `${intro} Decime producto/modelo exacto y que problema tenes. Si aparece un error, pasamelo textual.`;
   }
 
   if (/(como|configurar|usar|instalar|pasos)/.test(text)) {
-    return "Claro. Decime el producto y que queres hacer exactamente. Te paso pasos cortos para resolverlo.";
+    return `${intro} Decime el producto y que queres hacer exactamente. Te paso pasos cortos para resolverlo.`;
   }
 
-  return "Puedo ayudarte con fallas, uso de producto o devoluciones. Contame producto y detalle del caso.";
+  return `${intro} Puedo ayudarte con uso del producto, fallas simples o relevamiento del caso. Contame producto/modelo y detalle del inconveniente.`;
 }
 
 module.exports = {

@@ -50,6 +50,16 @@ const productVariantHintTokens = new Set([
   "go",
 ]);
 
+const supportGreetingPrefix = [
+  "Hola. Soy un asistente virtual de soporte de PC MIDI Center.",
+  "Si hace falta intervencion humana, el equipo responde de 9 a 14 hs.",
+].join("\n");
+
+const resolutionYesPattern = /^(si|sí|perfecto|listo|resuelto|solucionado|ya funciono|ya funcionó|ya pude|quedo|qued[oó] bien|anda|funciona)([!. ]|$)/i;
+const resolutionNoPattern = /^(no|sigue|sigue igual|no funciono|no funcionó|no pude|continua|continúa|todavia no|aun no|persiste)([!. ]|$)/i;
+
+const productOwnershipCuePattern = /\b(tengo|mi|es un|es una|modelo|sku|arturia|midiplus|teclado|interfaz|bateria|bater[aí]a|controlador)\b/i;
+
 let llmClient = null;
 let llmClientSignature = null;
 
@@ -87,10 +97,11 @@ async function buildAssistantReply(userText, options = {}) {
   const text = String(userText || "").trim();
   const sessionContext = options.sessionContext || {};
   const normalizedText = normalize(text);
+  const hasAssistantHistory = hasAssistantMessages(sessionContext?.messageHistory || []);
 
   if (!text) {
     return {
-      text: buildSupportReply(text),
+      text: maybePrependSupportIntro(buildSupportReply(text), hasAssistantHistory),
       mode: "fallback-empty",
       hits: [],
       styleExamples: [],
@@ -100,9 +111,19 @@ async function buildAssistantReply(userText, options = {}) {
     };
   }
 
+  const flowReply = resolveSupportFlowReply({
+    text,
+    normalizedText,
+    sessionContext,
+    hasAssistantHistory,
+  });
+  if (flowReply) {
+    return flowReply;
+  }
+
   if (isGreetingOnly(normalizedText)) {
     return {
-      text: buildGreetingReply(sessionContext.currentProduct || null),
+      text: buildGreetingReply(),
       mode: "greeting",
       hits: [],
       styleExamples: [],
@@ -121,7 +142,7 @@ async function buildAssistantReply(userText, options = {}) {
 
   if (productResolution.clarificationText) {
     return {
-      text: productResolution.clarificationText,
+      text: maybePrependSupportIntro(productResolution.clarificationText, hasAssistantHistory),
       mode: "product-clarification",
       hits: [],
       styleExamples: [],
@@ -133,7 +154,7 @@ async function buildAssistantReply(userText, options = {}) {
 
   if (productResolution.askForProductText) {
     return {
-      text: productResolution.askForProductText,
+      text: maybePrependSupportIntro(productResolution.askForProductText, hasAssistantHistory),
       mode: "needs-product",
       hits: [],
       styleExamples: [],
@@ -180,9 +201,24 @@ async function buildAssistantReply(userText, options = {}) {
     productContext,
   });
 
+  const immediateHumanRoute = detectImmediateHumanRoute({
+    normalizedText,
+    preferredCategory,
+    hits,
+  });
+  if (immediateHumanRoute) {
+    return buildHumanTriageResponse({
+      route: immediateHumanRoute,
+      activeProduct,
+      stateUpdate,
+      hasAssistantHistory,
+      detectedProduct: productResolution.detectedProduct,
+    });
+  }
+
   if (activeProduct && isFollowupSignal(normalize(text))) {
-    return {
-      text: buildContinuationReply({
+    return finalizeSupportReply({
+      replyText: buildContinuationReply({
         activeProduct,
         hits,
       }),
@@ -192,32 +228,43 @@ async function buildAssistantReply(userText, options = {}) {
       stateUpdate,
       activeProduct,
       detectedProduct: productResolution.detectedProduct,
-    };
+      hasAssistantHistory,
+      preferredCategory,
+      normalizedText,
+      allowResolutionCheck: false,
+    });
   }
 
   if (hits.length === 0) {
-    return {
-      text: buildKnowledgeFallbackReply(text, hits, activeProduct),
+    return finalizeSupportReply({
+      replyText: buildKnowledgeFallbackReply(text, hits, activeProduct),
       mode: "fallback-no-kb-hits",
       hits,
       styleExamples,
       stateUpdate,
       activeProduct,
       detectedProduct: productResolution.detectedProduct,
-    };
+      hasAssistantHistory,
+      preferredCategory,
+      normalizedText,
+      allowResolutionCheck: false,
+    });
   }
 
   const llm = getLLMClient();
   if (!llm) {
-    return {
-      text: buildKnowledgeFallbackReply(text, hits, activeProduct),
+    return finalizeSupportReply({
+      replyText: buildKnowledgeFallbackReply(text, hits, activeProduct),
       mode: "fallback-no-llm-key",
       hits,
       styleExamples,
       stateUpdate,
       activeProduct,
       detectedProduct: productResolution.detectedProduct,
-    };
+      hasAssistantHistory,
+      preferredCategory,
+      normalizedText,
+    });
   }
 
   try {
@@ -235,8 +282,8 @@ async function buildAssistantReply(userText, options = {}) {
       const drift = detectProductDrift(aiReply, activeProduct);
       if (drift) {
         stateUpdate.productDriftPrevented = true;
-        return {
-          text: buildProductSafeReply({
+        return finalizeSupportReply({
+          replyText: buildProductSafeReply({
             userText: text,
             activeProduct,
             hits,
@@ -247,33 +294,43 @@ async function buildAssistantReply(userText, options = {}) {
           stateUpdate,
           activeProduct,
           detectedProduct: productResolution.detectedProduct,
-        };
+          hasAssistantHistory,
+          preferredCategory,
+          normalizedText,
+          allowResolutionCheck: false,
+        });
       }
 
-      return {
-        text: limitText(aiReply, 2200),
+      return finalizeSupportReply({
+        replyText: limitText(aiReply, 2200),
         mode: "ai-rag",
         hits,
         styleExamples,
         stateUpdate,
         activeProduct,
         detectedProduct: productResolution.detectedProduct,
-      };
+        hasAssistantHistory,
+        preferredCategory,
+        normalizedText,
+      });
     }
   } catch (error) {
     const msg = error.response?.data || error.message;
     console.error("LLM error:", msg);
   }
 
-  return {
-    text: buildKnowledgeFallbackReply(text, hits, activeProduct),
+  return finalizeSupportReply({
+    replyText: buildKnowledgeFallbackReply(text, hits, activeProduct),
     mode: "fallback-llm-error",
     hits,
     styleExamples,
     stateUpdate,
     activeProduct,
     detectedProduct: productResolution.detectedProduct,
-  };
+    hasAssistantHistory,
+    preferredCategory,
+    normalizedText,
+  });
 }
 
 async function generateAIReply({
@@ -386,9 +443,13 @@ function resolveProductForTurn(text, sessionContext) {
   const currentProduct = sessionContext?.currentProduct || null;
   const pendingProductSwitch = sessionContext?.pendingProductSwitch || null;
 
-  const detectedMention = detectProductMention(text, {
-    minScore: productMinMatchScore,
-  });
+  const shouldAttemptDetection = shouldAttemptProductDetection(normalizedText, currentProduct);
+  const detectedMention = shouldAttemptDetection
+    ? detectProductMention(text, {
+        minScore: currentProduct ? Math.max(productMinMatchScore + 2, 9) : productMinMatchScore,
+        minConfidence: currentProduct ? "medium" : "low",
+      })
+    : null;
 
   const stateUpdate = {};
   const detectedProduct = detectedMention?.product || null;
@@ -442,9 +503,20 @@ function resolveProductForTurn(text, sessionContext) {
 
   if (detectedProduct) {
     if (!currentProduct) {
+      const explicitProductSelection = isExplicitProductSelection(normalizedText, detectedMention);
       const versionClarification = buildVersionClarificationPrompt(normalizedText, detectedMention);
       const shouldClarifyVersion =
         Boolean(versionClarification) && sessionContext?.lastMode !== "product-clarification";
+
+      if (!explicitProductSelection) {
+        return {
+          activeProduct: null,
+          detectedProduct,
+          stateUpdate,
+          askForProductText:
+            "Para evitar confusiones con modelos parecidos, confirmame producto/modelo exacto (ejemplo: Arturia MiniFuse 2 o MiniLab 3).",
+        };
+      }
 
       if (shouldClarifyVersion) {
         return {
@@ -520,19 +592,19 @@ function shouldSwitchProduct(normalizedText, detectedMention) {
     return false;
   }
 
-  if (hasSwitchCue(normalizedText)) {
-    return true;
-  }
-
   if (isContinuationMessage(normalizedText)) {
     return false;
   }
 
-  if (detectedMention.confidence === "high") {
+  if (hasSwitchCue(normalizedText)) {
+    return detectedMention.confidence !== "low";
+  }
+
+  if (detectedMention.confidence === "high" && hasExplicitProductOwnershipCue(normalizedText)) {
     return true;
   }
 
-  if (detectedMention.confidence === "medium" && /\b(compre|compre|tengo|mi|modelo|es un|es una)\b/.test(normalizedText)) {
+  if (detectedMention.confidence === "medium" && hasExplicitProductOwnershipCue(normalizedText) && hasStrongProductCue(normalizedText)) {
     return true;
   }
 
@@ -674,7 +746,7 @@ function buildKnowledgeFallbackReply(userText, hits, activeProduct) {
   if (!hits || hits.length === 0) {
     if (activeProduct) {
       return [
-        `Sigamos con ${activeProduct.name}.`,
+        `Seguimos con ${activeProduct.name}.`,
         "Necesito que me indiques el problema exacto y desde cuando ocurre.",
       ].join("\n");
     }
@@ -729,6 +801,105 @@ function buildKnowledgeFallbackReply(userText, hits, activeProduct) {
   }
 
   return buildSupportReply(userText);
+}
+
+function finalizeSupportReply({
+  replyText,
+  mode,
+  hits,
+  styleExamples,
+  stateUpdate,
+  activeProduct,
+  detectedProduct,
+  hasAssistantHistory,
+  preferredCategory,
+  normalizedText,
+  allowResolutionCheck = true,
+}) {
+  const nextStateUpdate = {
+    ...stateUpdate,
+  };
+
+  let finalText = maybePrependSupportIntro(replyText, hasAssistantHistory);
+
+  if (allowResolutionCheck && shouldAskResolutionCheck({ normalizedText, hits, preferredCategory })) {
+    finalText = appendResolutionCheck(finalText);
+    nextStateUpdate.supportFlow = {
+      stage: "awaiting_resolution_check",
+      intent: preferredCategory,
+      handoffRoute: resolveHandoffRoute(preferredCategory, normalizedText),
+    };
+    nextStateUpdate.humanActive = false;
+  }
+
+  return {
+    text: finalText,
+    mode,
+    hits,
+    styleExamples,
+    stateUpdate: nextStateUpdate,
+    activeProduct,
+    detectedProduct,
+  };
+}
+
+function buildHumanTriageResponse({ route, activeProduct, stateUpdate, hasAssistantHistory, detectedProduct }) {
+  return {
+    text: maybePrependSupportIntro(
+      buildHumanTriageReply({
+        route,
+        activeProduct,
+      }),
+      hasAssistantHistory
+    ),
+    mode: "human-triage",
+    hits: [],
+    styleExamples: [],
+    stateUpdate: {
+      ...stateUpdate,
+      clearSupportFlow: true,
+      humanActive: true,
+      lastIntent: route,
+    },
+    activeProduct,
+    detectedProduct,
+  };
+}
+
+function detectImmediateHumanRoute({ normalizedText, preferredCategory, hits }) {
+  if (/equivoc|envio incorrecto|producto equivocado|me llego otro|llego otro|enviaste otro|pedido incorrecto/.test(normalizedText)) {
+    return "equivocacion_envio";
+  }
+
+  if (/garanti|reembolso|reintegro|devolucion|devolver/.test(normalizedText)) {
+    return preferredCategory === "devolucion" ? "devolucion" : "garantia_consulta";
+  }
+
+  if (preferredCategory === "falla_producto" && !hasStrongAnswerCandidate(hits)) {
+    return "falla_producto";
+  }
+
+  return null;
+}
+
+function hasStrongAnswerCandidate(hits) {
+  return Array.isArray(hits) && hits.length > 0 && Number(hits[0]?.score || 0) >= 9.5;
+}
+
+function resolveHandoffRoute(preferredCategory, normalizedText) {
+  if (/equivoc|envio incorrecto|producto equivocado|me llego otro|llego otro|enviaste otro|pedido incorrecto/.test(normalizedText)) {
+    return "equivocacion_envio";
+  }
+
+  if (preferredCategory === "devolucion") {
+    return "devolucion";
+  }
+
+  if (/garanti/.test(normalizedText)) {
+    return "garantia_consulta";
+  }
+
+  return "falla_producto";
 }
 
 function buildProductSwitchPrompt(currentProduct, detectedProduct) {
@@ -826,11 +997,7 @@ function isGreetingOnly(normalizedText) {
 }
 
 function buildGreetingReply(activeProduct) {
-  if (activeProduct?.name) {
-    return `Hola. Seguimos con ${activeProduct.name}. Decime que problema tenes.`;
-  }
-
-  return "Hola. Soy soporte tecnico. Decime producto/modelo y que problema tenes.";
+  return `${supportGreetingPrefix}\nDecime producto/modelo y que problema tenes.`;
 }
 
 function isContinuationMessage(normalizedText) {
@@ -865,6 +1032,14 @@ function indicatesKeepCurrent(normalizedText) {
 
 function isAffirmative(normalizedText) {
   return /^(si|dale|ok|okay|de una|correcto|cambiamos|vamos con ese)\b/.test(normalizedText);
+}
+
+function isNegativeResolution(normalizedText) {
+  return resolutionNoPattern.test(String(normalizedText || "").trim());
+}
+
+function isAffirmativeResolution(normalizedText) {
+  return resolutionYesPattern.test(String(normalizedText || "").trim());
 }
 
 function detectIntentFromText(text) {
@@ -930,6 +1105,207 @@ function isSameOrCompatibleProduct(left, right) {
   }
 
   return false;
+}
+
+function resolveSupportFlowReply({ text, normalizedText, sessionContext, hasAssistantHistory }) {
+  const activeProduct = sessionContext.currentProduct || null;
+  const supportFlow = sessionContext.supportFlow || null;
+
+  if (sessionContext.humanActive) {
+    return {
+      text: "Gracias. Ya deje el caso listo para revision humana. Si queres iniciar un caso nuevo, escribi /nuevo.",
+      mode: "human-handoff",
+      hits: [],
+      styleExamples: [],
+      stateUpdate: {},
+      activeProduct,
+      detectedProduct: null,
+    };
+  }
+
+  if (!supportFlow || supportFlow.stage !== "awaiting_resolution_check") {
+    return null;
+  }
+
+  if (isAffirmativeResolution(normalizedText)) {
+    return {
+      text: "Perfecto. Me alegra que se haya resuelto. Si queres abrir un caso nuevo, escribime /nuevo.",
+      mode: "faq-resolved",
+      hits: [],
+      styleExamples: [],
+      stateUpdate: {
+        clearSupportFlow: true,
+        humanActive: false,
+      },
+      activeProduct,
+      detectedProduct: null,
+    };
+  }
+
+  if (isNegativeResolution(normalizedText)) {
+    const triageRoute = supportFlow.handoffRoute || supportFlow.intent || "falla_producto";
+    return {
+      text: maybePrependSupportIntro(
+        buildHumanTriageReply({
+          route: triageRoute,
+          activeProduct,
+        }),
+        hasAssistantHistory
+      ),
+      mode: "human-triage",
+      hits: [],
+      styleExamples: [],
+      stateUpdate: {
+        clearSupportFlow: true,
+        humanActive: true,
+        lastIntent: triageRoute,
+      },
+      activeProduct,
+      detectedProduct: null,
+    };
+  }
+
+  return {
+    text: "Responde si o no asi se si quedo resuelto o si lo paso a revision humana.",
+    mode: "faq-resolution-check",
+    hits: [],
+    styleExamples: [],
+    stateUpdate: {},
+    activeProduct,
+    detectedProduct: null,
+  };
+}
+
+function shouldAskResolutionCheck({ normalizedText, hits, preferredCategory }) {
+  if (!hits || hits.length === 0) {
+    return false;
+  }
+
+  if (isSensitiveHumanRoute(normalizedText, preferredCategory)) {
+    return false;
+  }
+
+  return Number(hits[0]?.score || 0) >= 9.5;
+}
+
+function maybePrependSupportIntro(replyText, hasAssistantHistory) {
+  if (hasAssistantHistory) {
+    return replyText;
+  }
+
+  return [supportGreetingPrefix, replyText].filter(Boolean).join("\n\n");
+}
+
+function appendResolutionCheck(replyText) {
+  const trimmed = String(replyText || "").trim();
+  return [trimmed, "¿Con esto pudiste resolver el inconveniente? Responde si o no."].join("\n\n");
+}
+
+function buildHumanTriageReply({ route, activeProduct }) {
+  const productLine = activeProduct?.name ? `Producto en seguimiento: ${activeProduct.name}.` : null;
+
+  if (route === "equivocacion_envio") {
+    return [
+      productLine,
+      "Este caso necesita revision humana.",
+      "Mientras tanto enviame:",
+      "1) Factura de la compra.",
+      "2) Producto esperado y producto recibido.",
+      "3) Direccion completa con ciudad, calles y codigo postal.",
+      "4) Departamento/piso si aplica.",
+      "5) Nombre completo, DNI y telefono de quien recibe.",
+      "No puedo confirmarte desde el bot si corresponde envio o reemplazo; eso lo revisa soporte.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (route === "devolucion" || route === "garantia_consulta") {
+    return [
+      productLine,
+      "Este caso necesita revision humana.",
+      "Enviame:",
+      "1) Factura o comprobante de compra.",
+      "2) Fecha y canal de compra.",
+      "3) Descripcion breve del inconveniente.",
+      "No puedo confirmarte desde el bot si el equipo esta en garantia o si corresponde devolucion/reembolso.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return [
+    productLine,
+    "Este caso necesita revision humana.",
+    "Para que soporte tecnico lo revise, enviame:",
+    "1) Producto/modelo exacto.",
+    "2) Factura de la compra.",
+    "3) Video mostrando la falla.",
+    "4) Desde cuando comenzo a ocurrir el problema.",
+    "No puedo confirmarte desde el bot garantia ni reemplazo; primero lo revisa el equipo.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function hasAssistantMessages(history) {
+  return Array.isArray(history) && history.some((item) => item?.role === "assistant");
+}
+
+function hasExplicitProductOwnershipCue(normalizedText) {
+  return productOwnershipCuePattern.test(String(normalizedText || ""));
+}
+
+function hasStrongProductCue(normalizedText) {
+  const tokens = tokenizeNormalizedText(normalizedText).filter(
+    (token) => !productClarifyGenericTokens.has(token) && !productClarifyCosmeticTokens.has(token)
+  );
+
+  return tokens.some((token) => /\d/.test(token)) || tokens.length >= 2;
+}
+
+function isExplicitProductSelection(normalizedText, detectedMention) {
+  if (!detectedMention) {
+    return false;
+  }
+
+  if (detectedMention.confidence === "high" && hasStrongProductCue(normalizedText)) {
+    return true;
+  }
+
+  if (hasExplicitProductOwnershipCue(normalizedText) && hasStrongProductCue(normalizedText)) {
+    return detectedMention.confidence !== "low";
+  }
+
+  return false;
+}
+
+function shouldAttemptProductDetection(normalizedText, currentProduct) {
+  if (!currentProduct) {
+    return true;
+  }
+
+  if (isGreetingOnly(normalizedText) || isContinuationMessage(normalizedText)) {
+    return false;
+  }
+
+  if (hasSwitchCue(normalizedText)) {
+    return true;
+  }
+
+  return hasExplicitProductOwnershipCue(normalizedText) && hasStrongProductCue(normalizedText);
+}
+
+function isSensitiveHumanRoute(normalizedText, preferredCategory) {
+  if (/equivoc|envio incorrecto|producto equivocado|me llego otro|llego otro|enviaste otro/.test(normalizedText)) {
+    return true;
+  }
+
+  if (/garanti|reembolso|reintegro|devolucion|devolver/.test(normalizedText)) {
+    return true;
+  }
+
+  return ["equivocacion_envio", "devolucion", "garantia_consulta"].includes(preferredCategory);
 }
 
 function buildComparableProductTokens(product) {

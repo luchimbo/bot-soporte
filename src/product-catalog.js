@@ -796,6 +796,22 @@ function cleanText(value) {
     .trim();
 }
 
+function buildFamilyKey(normalizedName) {
+  return tokenize(normalizedName)
+    .filter((token) => !genericProductTokens.has(token))
+    .filter((token) => !cosmeticTokens.has(token))
+    .join(" ");
+}
+
+function extractCosmeticVariant(normalizedName) {
+  const tokens = tokenize(normalizedName).filter((token) => cosmeticTokens.has(token));
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  return tokens.join(" ");
+}
+
 module.exports = {
   detectProductMention,
   buildProductSearchContext,
