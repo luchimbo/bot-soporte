@@ -27,6 +27,7 @@ Variables utiles:
 - `MOCK_WHATSAPP_SEND=true`: no envia a Meta, solo simula.
 - `KNOWLEDGE_BASE_FILE=data/knowledge-base.json`: salida de base local.
 - `PRODUCT_CATALOG_FILE=archivos/Productos.xlsx`: catalogo para bloquear producto en chat.
+- `TIENDANUBE_CATALOG_FILE=archivos/tiendanube-...csv`: catalogo exportado de Tiendanube para enriquecer aliases, categorias y slugs del matcher de producto.
 - `SUPPORT_PLAYBOOK_FILE=archivos/SoporteBot.xlsx`: workbook con `faq_respuestas`, `triage_humano` y `politicas_bot`.
 - `LLM_SIMPLE_MODEL` / `LLM_COMPLEX_MODEL`: permite rutear consultas simples a un modelo barato y troubleshooting tecnico a uno mas capaz.
 
@@ -42,7 +43,9 @@ El playbook de soporte se usa asi:
 - `KB_MAX_WHATSAPP_DOCS` / `KB_MAX_EMAIL_DOCS`: limite de documentos para el indice.
 - `KB_ENABLE_MANUALS`: activa indexado de manuales PDF.
 - `KB_MANUALS_DIR`: carpeta base de manuales (default `archivos/Manuales`).
-- `KB_MANUAL_BRANDS`: marcas a indexar (ej. `Arturia`, `Arturia,Midiplus`).
+- `KB_MANUAL_BRANDS`: marcas a indexar (ej. `Arturia`, `Arturia,Midiplus,Alctron`).
+- `KB_MAX_MANUAL_DOCS`: subir este valor si una marca grande (como Arturia) deja sin cupo a otras en el RAG tecnico.
+- Si algunos PDF vienen escaneados o sin texto util, el build usa OCR como fallback. Para eso instala dependencias locales con `python -m pip install -r requirements-ocr.txt`.
 - `KB_MAX_MANUAL_DOCS`: limite de chunks de manual en la base.
 - `KB_MANUAL_TOP_K`: cantidad de referencias de manual para mezclar en retrieval.
 - `KB_MANUAL_CHUNK_SIZE` / `KB_MANUAL_CHUNK_OVERLAP`: tamano y solape de chunks de manual.

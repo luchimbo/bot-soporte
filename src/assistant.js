@@ -40,7 +40,12 @@ const productClarifyGenericTokens = new Set([
   "controlador",
   "midi",
   "teclado",
+  "teclas",
   "musical",
+  "sintetizador",
+  "secuenciador",
+  "placa",
+  "sonido",
   "de",
   "del",
   "la",
@@ -235,7 +240,7 @@ async function buildAssistantReply(userText, options = {}) {
 
   const manualHits = searchKnowledgeBase(retrievalQuery, manualTopK, {
     productContext,
-    allowedSources: ["manual_arturia"],
+    allowedSources: ["manual_arturia", "manual_midiplus", "manual_alctron"],
   });
 
   const hits = mergeKnowledgeHits({
@@ -531,7 +536,7 @@ async function generateAIReply({
   const latestHistory = (sessionContext?.messageHistory || []).slice(-6);
   const conversationMessages = latestHistory.map(h => ({
     role: h.role,
-    content: limitText(String(h.text || ""), 180)
+    content: limitText(String(h.text || ""), 380)
   }));
 
 
@@ -552,7 +557,7 @@ async function generateAIReply({
   ].join("\n");
 
   const isComplex = model !== client.config?.simpleModel && activeProduct;
-  const maxTokensToUse = isComplex ? 500 : 300;
+  const maxTokensToUse = isComplex ? 700 : 450;
 
   const completion = await withTimeout(
     client.chat.completions.create({
@@ -1719,15 +1724,15 @@ function buildVersionClarificationPrompt(normalizedUserText, detectedMention) {
     return null;
   }
 
-  const topFamily = buildProductFamilySignature(candidates[0].product);
-  if (!topFamily) {
+  const topRoot = buildProductRootSignature(candidates[0].product);
+  if (!topRoot) {
     return null;
   }
 
   const variantsByKey = new Map();
   for (const candidate of candidates) {
-    const family = buildProductFamilySignature(candidate.product);
-    if (!family || family !== topFamily) {
+    const root = buildProductRootSignature(candidate.product);
+    if (!root || root !== topRoot) {
       continue;
     }
 
@@ -1753,7 +1758,7 @@ function buildVersionClarificationPrompt(normalizedUserText, detectedMention) {
     return null;
   }
 
-  const queryVariantTokens = extractVariantTokensFromText(normalizedUserText);
+  const queryVariantTokens = extractDisambiguationTokensFromText(normalizedUserText);
   if (isVariantChoiceDecisive(queryVariantTokens, variantCandidates)) {
     return null;
   }
@@ -1780,11 +1785,21 @@ function buildProductFamilySignature(product) {
     .filter((token) => !productClarifyGenericTokens.has(token))
     .filter((token) => !isVariantHintToken(token));
 
-  return tokens.join(" ");
+  return canonicalizeSignatureTokens(tokens);
+}
+
+function buildProductRootSignature(product) {
+  const tokens = tokenizeProductName(product)
+    .filter((token) => !productClarifyCosmeticTokens.has(token))
+    .filter((token) => !productClarifyGenericTokens.has(token))
+    .filter((token) => !isVariantHintToken(token))
+    .filter((token) => !/^\d{1,3}$/.test(token));
+
+  return canonicalizeSignatureTokens(tokens);
 }
 
 function buildProductVariantKey(product) {
-  const variantTokens = extractVariantTokensFromProduct(product);
+  const variantTokens = extractDisambiguationTokensFromProduct(product);
   if (variantTokens.length === 0) {
     return "standard";
   }
@@ -1794,6 +1809,10 @@ function buildProductVariantKey(product) {
 
 function extractVariantTokensFromProduct(product) {
   return extractVariantTokensFromText(normalize(product?.normalizedName || product?.name || ""));
+}
+
+function extractDisambiguationTokensFromProduct(product) {
+  return extractDisambiguationTokensFromText(normalize(product?.normalizedName || product?.name || ""));
 }
 
 function extractVariantTokensFromText(normalizedText) {
@@ -1809,6 +1828,12 @@ function extractVariantTokensFromText(normalizedText) {
   return [...new Set(out)];
 }
 
+function extractDisambiguationTokensFromText(normalizedText) {
+  const variantTokens = extractVariantTokensFromText(normalizedText);
+  const numberTokens = tokenizeNormalizedText(normalizedText).filter((token) => /^\d{1,3}$/.test(token));
+  return [...new Set([...variantTokens, ...numberTokens])];
+}
+
 function isVariantChoiceDecisive(queryVariantTokens, variantCandidates) {
   if (!queryVariantTokens || queryVariantTokens.length === 0) {
     return false;
@@ -1816,7 +1841,7 @@ function isVariantChoiceDecisive(queryVariantTokens, variantCandidates) {
 
   const querySet = new Set(queryVariantTokens);
   const scores = variantCandidates.map((item) => {
-    const variantTokens = extractVariantTokensFromProduct(item.product);
+    const variantTokens = extractDisambiguationTokensFromProduct(item.product);
     let score = 0;
 
     for (const token of variantTokens) {
@@ -1909,6 +1934,10 @@ function toTitleCase(value) {
       return `${token.charAt(0).toUpperCase()}${token.slice(1)}`;
     })
     .join(" ");
+}
+
+function canonicalizeSignatureTokens(tokens) {
+  return [...new Set(tokens.filter(Boolean))].sort().join(" ");
 }
 
 function resolveLLMConfig() {

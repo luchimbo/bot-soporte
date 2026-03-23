@@ -30,14 +30,19 @@ const enableManualDocs = String(process.env.KB_ENABLE_MANUALS || "true")
 const manualsBaseDir = process.env.KB_MANUALS_DIR
   ? path.resolve(rootDir, process.env.KB_MANUALS_DIR)
   : path.join(archivosDir, "Manuales");
-const manualBrands = parseCsvList(process.env.KB_MANUAL_BRANDS || "Arturia");
-const maxManualDocs = Number(process.env.KB_MAX_MANUAL_DOCS || 6500);
+const manualBrands = parseCsvList(process.env.KB_MANUAL_BRANDS || "Arturia,Midiplus,Alctron");
+const maxManualDocs = Number(process.env.KB_MAX_MANUAL_DOCS || 9000);
 const manualChunkSize = Number(process.env.KB_MANUAL_CHUNK_SIZE || 950);
 const manualChunkOverlap = Number(process.env.KB_MANUAL_CHUNK_OVERLAP || 160);
 const manualMinChunkLength = Number(process.env.KB_MANUAL_MIN_CHUNK_LEN || 180);
 const manualMaxFilesPerBrand = Number(process.env.KB_MANUAL_MAX_FILES_PER_BRAND || 80);
 const manualParseTimeoutMs = Number(process.env.KB_MANUAL_PARSE_TIMEOUT_MS || 120000);
 const manualTextMaxBufferBytes = Number(process.env.KB_MANUAL_MAX_BUFFER_BYTES || 55 * 1024 * 1024);
+const manualOcrFallbackEnabled = String(process.env.KB_MANUAL_OCR_FALLBACK || "true")
+  .trim()
+  .toLowerCase() === "true";
+const manualOcrMinChars = Number(process.env.KB_MANUAL_OCR_MIN_CHARS || 80);
+const manualOcrTimeoutMs = Number(process.env.KB_MANUAL_OCR_TIMEOUT_MS || 240000);
 
 const spamPatterns = [
   /calvary greetings/i,
@@ -119,6 +124,7 @@ const manualHowToPatterns = [
 ];
 
 let pdftotextAvailable = null;
+let manualOcrAvailable = null;
 
 async function main() {
   assertExists(whatsappFile, "No encontre el CSV de WhatsApp");
@@ -134,6 +140,9 @@ async function main() {
     whatsappAccepted: 0,
     emailAccepted: 0,
     manualAccepted: 0,
+    manualOcrAccepted: 0,
+    manualOcrFilesUsed: 0,
+    manualOcrFilesFailed: 0,
     manualDuplicates: 0,
     manualFilesProcessed: 0,
     manualFilesFailed: 0,
@@ -260,6 +269,9 @@ async function main() {
       whatsapp: stats.whatsappAccepted,
       email: stats.emailAccepted,
       manuals: stats.manualAccepted,
+      manualOcrAccepted: stats.manualOcrAccepted,
+      manualOcrFilesUsed: stats.manualOcrFilesUsed,
+      manualOcrFilesFailed: stats.manualOcrFilesFailed,
       manualDuplicatesSkipped: stats.manualDuplicates,
       manualFilesProcessed: stats.manualFilesProcessed,
       manualFilesFailed: stats.manualFilesFailed,
@@ -286,7 +298,7 @@ async function main() {
   console.log(`WhatsApp: ${stats.whatsappAccepted}`);
   console.log(`Mail: ${stats.emailAccepted}`);
   console.log(
-    `Manuales: ${stats.manualAccepted} (archivos procesados=${stats.manualFilesProcessed}, fallidos=${stats.manualFilesFailed}, duplicados=${stats.manualDuplicates})`
+    `Manuales: ${stats.manualAccepted} (archivos procesados=${stats.manualFilesProcessed}, fallidos=${stats.manualFilesFailed}, duplicados=${stats.manualDuplicates}, ocr_files=${stats.manualOcrFilesUsed})`
   );
   console.log(`Ejemplos historicos de respuesta: ${stats.styleAccepted}`);
   console.log(
@@ -383,7 +395,7 @@ function collectManualDocs({ docs, dedupe, stats }) {
     return;
   }
 
-  const selectedBrands = manualBrands.length > 0 ? manualBrands : ["Arturia"];
+  const selectedBrands = manualBrands.length > 0 ? manualBrands : ["Arturia", "Midiplus", "Alctron"];
   const safeOverlap = clamp(manualChunkOverlap, 0, Math.floor(manualChunkSize * 0.65));
 
   for (const brand of selectedBrands) {
@@ -408,7 +420,7 @@ function collectManualDocs({ docs, dedupe, stats }) {
       const filePath = path.join(brandDir, fileName);
       let parsedPages;
       try {
-        parsedPages = extractPdfPages(filePath);
+        parsedPages = extractPdfPages(filePath, stats);
       } catch (error) {
         stats.manualFilesFailed += 1;
         console.warn(`No pude leer manual ${fileName}: ${error.message}`);
@@ -512,7 +524,22 @@ function isPdfToTextAvailable() {
   return pdftotextAvailable;
 }
 
-function extractPdfPages(filePath) {
+function isManualOcrAvailable() {
+  if (manualOcrAvailable !== null) {
+    return manualOcrAvailable;
+  }
+
+  const scriptPath = path.join(__dirname, "ocr-pdf-manual.py");
+  const probe = spawnSync("python", [scriptPath], {
+    encoding: "utf8",
+    timeout: 10000,
+  });
+
+  manualOcrAvailable = !probe.error && probe.status === 1;
+  return manualOcrAvailable;
+}
+
+function extractPdfPages(filePath, stats) {
   const parseResult = spawnSync("pdftotext", ["-enc", "UTF-8", "-layout", filePath, "-"], {
     encoding: "utf8",
     timeout: manualParseTimeoutMs,
@@ -529,14 +556,68 @@ function extractPdfPages(filePath) {
   }
 
   const rawText = String(parseResult.stdout || "");
-  if (!rawText.trim()) {
-    return [];
+  if (!rawText.trim() || rawText.trim().length < manualOcrMinChars) {
+    return extractPdfPagesWithFallbackOcr(filePath, stats, rawText.trim().length);
   }
 
   return rawText.split("\f").map((text, index) => ({
     number: index + 1,
     text,
   }));
+}
+
+function extractPdfPagesWithFallbackOcr(filePath, stats, extractedChars) {
+  if (!manualOcrFallbackEnabled || !isManualOcrAvailable()) {
+    return [];
+  }
+
+  const scriptPath = path.join(__dirname, "ocr-pdf-manual.py");
+  const result = spawnSync("python", [scriptPath, filePath], {
+    encoding: "utf8",
+    timeout: manualOcrTimeoutMs,
+    maxBuffer: manualTextMaxBufferBytes,
+  });
+
+  if (result.error) {
+    if (stats) {
+      stats.manualOcrFilesFailed += 1;
+    }
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    if (stats) {
+      stats.manualOcrFilesFailed += 1;
+    }
+    const errorOutput = cleanText(result.stderr || result.stdout || "") || `codigo=${result.status}`;
+    throw new Error(`OCR fallback fallo (${extractedChars} chars extraidos): ${errorOutput}`);
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(String(result.stdout || "{}"));
+  } catch (error) {
+    if (stats) {
+      stats.manualOcrFilesFailed += 1;
+    }
+    throw new Error(`OCR fallback devolvio JSON invalido: ${error.message}`);
+  }
+
+  const pages = Array.isArray(parsed?.pages)
+    ? parsed.pages
+        .map((page, index) => ({
+          number: Number(page?.number) || index + 1,
+          text: String(page?.text || ""),
+        }))
+        .filter((page) => page.text.trim())
+    : [];
+
+  if (pages.length > 0 && stats) {
+    stats.manualOcrFilesUsed += 1;
+    stats.manualOcrAccepted += pages.length;
+  }
+
+  return pages;
 }
 
 function cleanManualPageText(value) {

@@ -1,8 +1,13 @@
 const fs = require("fs");
+const { parse } = require("csv-parse/sync");
 const XLSX = require("xlsx");
 const { resolveProjectPath } = require("./runtime-paths");
 
 const defaultCatalogPath = resolveProjectPath(null, "archivos/Productos.xlsx");
+const defaultTiendanubeCatalogPath = resolveProjectPath(
+  null,
+  "archivos/tiendanube-78394-17742912284600117320926671510 (1).csv"
+);
 
 const genericProductTokens = new Set([
   "producto",
@@ -110,6 +115,8 @@ const confidenceRank = {
 let cache = {
   filePath: null,
   mtimeMs: 0,
+  extraFilePath: null,
+  extraMtimeMs: 0,
   warnedMissing: false,
   products: [],
   tokenCounts: {},
@@ -264,6 +271,7 @@ function getProductCatalogInfo() {
 
 function loadCatalog() {
   const filePath = getCatalogPath();
+  const extraCatalogPath = getTiendanubeCatalogPath();
 
   if (!fs.existsSync(filePath)) {
     if (!cache.warnedMissing) {
@@ -273,6 +281,8 @@ function loadCatalog() {
 
     cache.filePath = filePath;
     cache.mtimeMs = 0;
+    cache.extraFilePath = extraCatalogPath;
+    cache.extraMtimeMs = 0;
     cache.products = [];
     cache.tokenCounts = {};
     cache.productByKey = new Map();
@@ -280,7 +290,13 @@ function loadCatalog() {
   }
 
   const stat = fs.statSync(filePath);
-  if (cache.filePath === filePath && cache.mtimeMs === stat.mtimeMs) {
+  const extraStat = extraCatalogPath && fs.existsSync(extraCatalogPath) ? fs.statSync(extraCatalogPath) : null;
+  if (
+    cache.filePath === filePath &&
+    cache.mtimeMs === stat.mtimeMs &&
+    cache.extraFilePath === extraCatalogPath &&
+    cache.extraMtimeMs === (extraStat?.mtimeMs || 0)
+  ) {
     return cache;
   }
 
@@ -288,6 +304,7 @@ function loadCatalog() {
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  const extraCatalog = loadTiendanubeCatalog(extraCatalogPath);
 
   const rawProducts = [];
   const tokenCounts = Object.create(null);
@@ -309,7 +326,12 @@ function loadCatalog() {
       continue;
     }
 
-    const tokens = tokenize(normalizedName);
+    const extraRecord = resolveTiendanubeRecord(extraCatalog, { sku, normalizedName });
+    const enrichedName = extraRecord?.name || name;
+    const enrichedNormalizedName = normalize(enrichedName);
+    const tokens = tokenize(enrichedNormalizedName);
+    const extraAliases = buildTiendanubeAliases(extraRecord);
+
     if (tokens.length === 0) {
       continue;
     }
@@ -322,14 +344,17 @@ function loadCatalog() {
       catalogKey: sku ? `sku:${normalizeSku(sku)}` : `name:${normalizedName}`,
       sku,
       skuNorm: normalizeSku(sku),
-      name,
-      normalizedName,
+      name: enrichedName,
+      normalizedName: enrichedNormalizedName,
       tokens,
       isAccessoryLike: isAccessoryLikeProduct({
-        normalizedName,
+        normalizedName: enrichedNormalizedName,
         rubro: cleanText(row.Rubro || row.rubro || ""),
         subRubro: cleanText(row["Sub Rubro"] || row.sub_rubro || row.subRubro || ""),
+        extraCategory: extraRecord?.categories || "",
       }),
+      extraAliases,
+      description: extraRecord?.description || "",
     });
   }
 
@@ -378,6 +403,8 @@ function loadCatalog() {
   cache = {
     filePath,
     mtimeMs: stat.mtimeMs,
+    extraFilePath: extraCatalogPath,
+    extraMtimeMs: extraStat?.mtimeMs || 0,
     warnedMissing: false,
     products,
     tokenCounts,
@@ -617,6 +644,12 @@ function buildAliases({ product, tokenCounts }) {
 
   aliases.add(product.normalizedName);
 
+  for (const alias of product.extraAliases || []) {
+    if (alias && alias.length >= 3) {
+      aliases.add(alias);
+    }
+  }
+
   return [...aliases]
     .map((alias) => alias.trim())
     .filter((alias) => alias.length >= 3)
@@ -654,6 +687,7 @@ function toPublicProduct(product) {
     sku: product.sku || null,
     name: product.name,
     normalizedName: product.normalizedName,
+    familyKey: buildFamilyKey(product.normalizedName),
   };
 }
 
@@ -768,6 +802,15 @@ function getCatalogPath() {
   return resolveProjectPath(process.env.PRODUCT_CATALOG_FILE, defaultCatalogPath);
 }
 
+function getTiendanubeCatalogPath() {
+  const configured = String(process.env.TIENDANUBE_CATALOG_FILE || "").trim();
+  if (!configured) {
+    return defaultTiendanubeCatalogPath;
+  }
+
+  return resolveProjectPath(configured, defaultTiendanubeCatalogPath);
+}
+
 function normalizeSku(value) {
   return normalize(value).replace(/\s+/g, "");
 }
@@ -833,8 +876,8 @@ function cleanText(value) {
     .trim();
 }
 
-function isAccessoryLikeProduct({ normalizedName, rubro, subRubro }) {
-  const categoryText = normalize(`${rubro} ${subRubro}`);
+function isAccessoryLikeProduct({ normalizedName, rubro, subRubro, extraCategory = "" }) {
+  const categoryText = normalize(`${rubro} ${subRubro} ${extraCategory}`);
   if (/accesor|cable/.test(categoryText)) {
     return true;
   }
@@ -857,6 +900,103 @@ function extractCosmeticVariant(normalizedName) {
   }
 
   return tokens.join(" ");
+}
+
+function loadTiendanubeCatalog(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return {
+      bySku: new Map(),
+      byName: new Map(),
+    };
+  }
+
+  const raw = fs.readFileSync(filePath, "latin1");
+  const rows = parse(raw, {
+    columns: true,
+    skip_empty_lines: true,
+    delimiter: ";",
+    relax_quotes: true,
+    relax_column_count: true,
+    bom: true,
+  });
+
+  const bySku = new Map();
+  const byName = new Map();
+  for (const row of rows) {
+    const name = cleanText(row["Nombre"] || "");
+    const sku = cleanText(row["SKU"] || "");
+    const normalizedName = normalize(name);
+    if (!name) {
+      continue;
+    }
+
+    const record = {
+      name,
+      normalizedName,
+      slug: cleanText(row["Identificador de URL"] || ""),
+      categories: cleanText(row["Categorías"] || row["Categor?as"] || ""),
+      tags: cleanText(row["Tags"] || ""),
+      seoTitle: cleanText(row["Título para SEO"] || row["T?tulo para SEO"] || ""),
+      description: cleanHtmlText(row["Descripción"] || row["Descripci�n"] || ""),
+      brand: cleanText(row["Marca"] || ""),
+    };
+
+    if (sku) {
+      bySku.set(normalizeSku(sku), record);
+    }
+
+    byName.set(normalizedName, record);
+  }
+
+  return { bySku, byName };
+}
+
+function resolveTiendanubeRecord(extraCatalog, { sku, normalizedName }) {
+  if (!extraCatalog) {
+    return null;
+  }
+
+  const skuNorm = normalizeSku(sku || "");
+  if (skuNorm && extraCatalog.bySku.has(skuNorm)) {
+    return extraCatalog.bySku.get(skuNorm);
+  }
+
+  if (normalizedName && extraCatalog.byName.has(normalizedName)) {
+    return extraCatalog.byName.get(normalizedName);
+  }
+
+  return null;
+}
+
+function buildTiendanubeAliases(record) {
+  if (!record) {
+    return [];
+  }
+
+  const aliases = new Set();
+  const candidateTexts = [record.slug, record.seoTitle, record.tags, record.categories, record.brand]
+    .filter(Boolean)
+    .map(normalize);
+
+  for (const text of candidateTexts) {
+    aliases.add(text);
+    for (const token of tokenize(text)) {
+      if (token.length >= 4 && !genericProductTokens.has(token) && !cosmeticTokens.has(token)) {
+        aliases.add(token);
+      }
+    }
+  }
+
+  return [...aliases].filter(Boolean).slice(0, 16);
+}
+
+function cleanHtmlText(value) {
+  return cleanText(
+    String(value || "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+  );
 }
 
 module.exports = {
