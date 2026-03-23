@@ -193,7 +193,7 @@ async function buildAssistantReply(userText, options = {}) {
   if (activeProduct && looksLikeProductOnlyMessage(normalizedText, activeProduct)) {
     return {
       text: maybePrependSupportIntro(
-        `Perfecto, trabajemos sobre ${activeProduct.name}. Decime que problema tenes y desde cuando ocurre.`,
+        `¡Bárbaro! Sobre tu ${activeProduct.name}, contame cortito qué problema te está dando así le buscamos la vuelta.`,
         hasAssistantHistory
       ),
       mode: "needs-problem-detail",
@@ -501,8 +501,8 @@ async function generateAIReply({
     "",
     // ── 8. METODOLOGIA DE DIAGNOSTICO ──
     "Cuando des soporte tecnico:",
-    "- Da pasos cortos, concretos y accionables. Un paso a la vez si es posible.",
-    "- Confirma con el cliente si el paso funciono antes de pasar al siguiente.",
+    "- REGLA DE ORO: Da pasos cortos, concretos y accionables. NUNCA des mas de 1 o 2 instrucciones a la vez.",
+    "- REGLA DE ORO: Termina SIEMPRE tu mensaje preguntando si el cliente pudo probarlo o que resultado le dio. (Ej: '¿Pudiste revisar el botón verde?', '¿Qué luz enciende ahora?').",
     "- Si falta informacion para diagnosticar, pedi maximo 2 datos concretos y especificos (no hagas 5 preguntas a la vez).",
     "- Si el manual esta en ingles, traduce los pasos a espanol claro sin jerga innecesaria.",
     "- Si hay multiples soluciones posibles, empeza por la mas simple y comun.",
@@ -676,7 +676,7 @@ function resolveProductForTurn(text, sessionContext) {
           detectedProduct,
           stateUpdate,
           askForProductText:
-            "Para evitar confusiones con modelos parecidos, confirmame producto/modelo exacto (ejemplo: Arturia MiniFuse 2 o MiniLab 3).",
+            "¡Hola! Para poder ayudarte bien, ¿me confirmás el modelo exacto del equipo que tenés? (ej: MiniFuse 2)",
         };
       }
 
@@ -752,7 +752,7 @@ function resolveProductForTurn(text, sessionContext) {
       detectedProduct,
       stateUpdate,
       askForProductText:
-        "Para ayudarte bien necesito el producto/modelo exacto (ejemplo: Arturia KeyLab 61 MK3 o el SKU). Asi evitamos confusiones con otros modelos.",
+        "Para poder ayudarte, ¿me indicás el modelo exacto del equipo que tenés? (ejemplo: Arturia KeyLab 61 MK3 o el SKU).",
     };
   }
 
@@ -893,7 +893,7 @@ function buildProductSafeReply({ userText, activeProduct, hits }) {
 
   return [
     `Sigamos con ${productLabel}.`,
-    "Contame que paso en la ultima prueba y que mensaje exacto ves.",
+    "Contame qué pasó en la última prueba y qué mensaje exacto ves.",
     "Si queres cambiar a otro producto, decimelo explicitamente.",
   ].join("\n");
 }
@@ -976,9 +976,9 @@ function buildKnowledgeFallbackReply(userText, hits, activeProduct) {
     return [
       productLine,
       "Vamos a diagnosticarlo paso a paso con base en casos similares.",
-      "1) Producto/modelo exacto.",
-      "2) Que falla hace y desde cuando.",
-      "3) Si aparece mensaje de error, pasamelo textual.",
+      "1) ¿Cuál es el producto/modelo exacto?",
+      "2) ¿Qué falla hace y desde cuándo?",
+      "3) Si aparece un mensaje de error, ¿me lo pasás textual?",
       `Referencia interna: ${shortCase}`,
     ]
       .filter(Boolean)
@@ -1072,14 +1072,8 @@ function detectImmediateHumanRoute({ normalizedText, preferredCategory, hits }) 
     return preferredCategory === "devolucion" ? "devolucion" : "garantia_consulta";
   }
 
-  if (preferredCategory === "falla_producto") {
-    const bestScore = hits?.[0]?.score || 0;
-    // Bajamos la agresividad: si hay al menos un hit con puntaje decente (5.5),
-    // dejamos que el LLM intente resolver antes de derivar a humano.
-    const isWeakCandidate = !hasStrongAnswerCandidate(hits) && (hits.length === 0 || bestScore < 5.5);
-    if (isWeakCandidate) {
-      return "falla_producto";
-    }
+  if (preferredCategory === "garantia_consulta" && hits.length === 0) {
+    return "garantia_consulta";
   }
 
   return null;
@@ -1564,16 +1558,17 @@ function buildHumanTriageReply({ route, activeProduct }) {
   }
 
   // Falla de producto o default
-  return [
+  const fallbackLines = [
     productLine,
-    "Este caso necesita revision humana.",
-    "Para que soporte tecnico lo revise, enviame:",
-    activeProduct ? null : "1) Producto/modelo exacto.",
-    "2) Factura de la compra.",
-    "3) Video mostrando la falla.",
-    "4) Desde cuando comenzo a ocurrir el problema.",
-    "No puedo confirmarte desde el bot garantia ni reemplazo; primero lo revisa el equipo.",
-  ]
+    "Veo que vamos a necesitar que un técnico o especialista revise este caso a fondo.",
+    "Para agilizar y que te respondan con la solución, por favor dejanos por escrito:",
+    activeProduct ? null : "El modelo exacto de tu equipo.",
+    "Una fotito o captura de la factura de compra.",
+    "Un videito corto, audio o detalle explicando la falla.",
+    "En breve un compañero humano tomará tu caso. (No puedo confirmar garantías ni reemplazos de forma automática).",
+  ];
+
+  return fallbackLines
     .filter(Boolean)
     .join("\n");
 }
