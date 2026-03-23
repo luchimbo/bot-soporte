@@ -61,8 +61,8 @@ const productVariantHintTokens = new Set([
 
 const supportGreetingPrefix = buildSupportGreetingPrefix();
 
-const resolutionYesPattern = /^(si|sí|perfecto|listo|resuelto|solucionado|ya funciono|ya funcionó|ya pude|quedo|qued[oó] bien|anda|funciona)([!. ]|$)/i;
-const resolutionNoPattern = /^(no|sigue|sigue igual|no funciono|no funcionó|no pude|continua|continúa|todavia no|aun no|persiste)([!. ]|$)/i;
+const resolutionYesPattern = /^\s*(si|sí|perfecto|listo|resuelto|solucionado|ya funcion[oó]|ya pude|qued[oó]|qued[oó] bien|anda|funciona)[\s!. ]*$/i;
+const resolutionNoPattern = /^\s*(no|nop|nope|n|sigue|sigue igual|no funcion[oó]|no pude|contin[uú]a|todavia no|aun no|persiste)[\s!. ]*$/i;
 
 const productOwnershipCuePattern = /\b(tengo|mi|es un|es una|modelo|sku|arturia|midiplus|teclado|interfaz|bateria|bater[aí]a|controlador)\b/i;
 const accessoryLikeProductPattern = /\b(fuente|cable|stand|soporte|adaptador|holder|pedal|music stand)\b/i;
@@ -450,8 +450,8 @@ async function generateAIReply({
 
   const systemPrompt = [
     // ── 1. IDENTIDAD ──
-    "Sos el asistente virtual de soporte tecnico de PC MIDI Center, una tienda argentina especializada en equipamiento musical, audio profesional, instrumentos MIDI, interfaces, controladores, sintetizadores, monitores de estudio y accesorios.",
-    "Trabajas exclusivamente por WhatsApp. Tu objetivo es resolver la mayor cantidad posible de consultas tecnicas de forma autonoma antes de escalar a un humano.",
+    "Eres el asistente virtual de soporte tecnico de PC MIDI Center, una tienda argentina especializada en equipamiento musical, audio profesional, instrumentos MIDI, interfaces, controladores, sintetizadores, monitores de estudio y accesorios.",
+    "No te llamas 'Sos' ni tienes nombre propio personal. Tu rol es resolver la mayor cantidad posible de consultas tecnicas de forma autonoma por WhatsApp antes de derivar a un humano.",
     "",
     // ── 2. MARCAS Y PRODUCTOS ──
     "PC MIDI Center vende marcas como Arturia, Midiplus, PreSonus, M-Audio, Korg, Roland, Yamaha, Behringer, Focusrite, Mackie, Audio-Technica, AKG, Shure, Sennheiser, Native Instruments, Novation, Akai, entre otras.",
@@ -1060,7 +1060,9 @@ function detectImmediateHumanRoute({ normalizedText, preferredCategory, hits }) 
     normalizedText,
     preferredCategory,
   });
-  if (playbookMatch?.category) {
+  // Desactivamos el handoff instantaneo de la planilla para falla_producto
+  // asi el LLM puede intentar diagnosticar primero.
+  if (playbookMatch?.category && playbookMatch.category !== "falla_producto") {
     return playbookMatch.category;
   }
 
@@ -1476,15 +1478,10 @@ function resolveSupportFlowReply({ text, normalizedText, sessionContext, hasAssi
 }
 
 function shouldAskResolutionCheck({ normalizedText, hits, preferredCategory }) {
-  if (!hits || hits.length === 0) {
-    return false;
-  }
-
-  if (isSensitiveHumanRoute(normalizedText, preferredCategory)) {
-    return false;
-  }
-
-  return Number(hits[0]?.score || 0) >= 9.5;
+  // Deshabilitado: Evita colisiones con las reglas del LLM, que ahora
+  // debe formular interacciones cortas ("¿pudiste probar?") de forma natural,
+  // en lugar de añadir preguntas robóticas al final de cada turno resolutivo.
+  return false;
 }
 
 function maybePrependSupportIntro(replyText, hasAssistantHistory) {
