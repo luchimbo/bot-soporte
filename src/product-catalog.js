@@ -16,10 +16,15 @@ const genericProductTokens = new Set([
   "controladores",
   "teclado",
   "teclados",
+  "teclas",
   "organo",
   "musical",
   "midi",
   "audio",
+  "sonido",
+  "placa",
+  "sintetizador",
+  "secuenciador",
   "studio",
   "usb",
   "black",
@@ -141,6 +146,7 @@ function detectProductMention(text, options = {}) {
   const queryVariantTokens = new Set(tokens.filter((token) => isVariantToken(token)));
   const queryNumberTokens = new Set(extractNumberTokens(normalizedText));
   const queryAccessoryTokens = new Set(tokens.filter((token) => accessoryLikeTokens.has(token)));
+  const queryCosmeticTokens = new Set(tokens.filter((token) => cosmeticTokens.has(token)));
 
   if (tokenSet.size === 0 && specificTokens.length === 0 && !hasPotentialSku(normalizedText)) {
     return null;
@@ -175,7 +181,7 @@ function detectProductMention(text, options = {}) {
     return null;
   }
 
-  const top = matches[0];
+  const top = choosePreferredTopMatch(matches, normalizedText, queryCosmeticTokens) || matches[0];
   const second = matches[1];
   const gap = second ? top.score - second.score : top.score;
   const confidence = classifyConfidence(top.score, gap, top.specificHits);
@@ -194,6 +200,77 @@ function detectProductMention(text, options = {}) {
       score: Number(item.score.toFixed(3)),
     })),
   };
+}
+
+function choosePreferredTopMatch(matches, normalizedText, queryCosmeticTokens) {
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return null;
+  }
+
+  if (queryCosmeticTokens && queryCosmeticTokens.size > 0) {
+    return matches[0];
+  }
+
+  const top = matches[0];
+  const topGroup = buildCosmeticGroupKey(top.product);
+  if (!topGroup) {
+    return top;
+  }
+
+  const nearby = matches.filter((item) => top.score - item.score <= 1.5);
+  const sameGroup = nearby.filter((item) => buildCosmeticGroupKey(item.product) === topGroup);
+
+  if (sameGroup.length < 2) {
+    return top;
+  }
+
+  const standard = sameGroup.find((item) => !extractCosmeticVariant(item.product.normalizedName));
+  if (standard) {
+    return standard;
+  }
+
+  return {
+    ...top,
+    product: buildSyntheticFamilyProduct(top.product),
+  };
+}
+
+function buildSyntheticFamilyProduct(product) {
+  const groupKey = buildCosmeticGroupKey(product);
+  const label = formatCanonicalProductLabel(groupKey || product.normalizedName || product.name || "");
+  return {
+    ...product,
+    catalogKey: `family:${groupKey || normalize(product.name || product.normalizedName || "")}`,
+    sku: null,
+    name: label,
+    normalizedName: normalize(label),
+  };
+}
+
+function buildCosmeticGroupKey(product) {
+  const normalizedName = normalize(product?.normalizedName || product?.name || "");
+  if (!normalizedName) {
+    return "";
+  }
+
+  return tokenizeFamilyName(normalizedName)
+    .filter((token) => !genericProductTokens.has(token))
+    .filter((token) => !cosmeticTokens.has(token))
+    .join(" ");
+}
+
+function formatCanonicalProductLabel(value) {
+  return tokenizeFamilyName(value)
+    .map((token) => {
+      if (/^mk\d+$/i.test(token) || /^v\d+$/i.test(token)) {
+        return token.toUpperCase();
+      }
+      if (/^\d+$/.test(token)) {
+        return token;
+      }
+      return token.charAt(0).toUpperCase() + token.slice(1);
+    })
+    .join(" ");
 }
 
 function buildProductSearchContext(productLike) {
@@ -858,6 +935,13 @@ function tokenize(value) {
     .split(/[^a-z0-9]+/)
     .map((token) => token.trim())
     .filter((token) => token.length >= 2);
+}
+
+function tokenizeFamilyName(value) {
+  return normalize(value)
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2 || /^\d$/.test(token));
 }
 
 function normalize(value) {
