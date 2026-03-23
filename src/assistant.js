@@ -666,6 +666,10 @@ function resolveProductForTurn(text, sessionContext) {
       const shouldClarifyVersion =
         Boolean(versionClarification) && sessionContext?.lastMode !== "product-clarification";
 
+      // Guardamos el producto en la sesion incluso si pedimos confirmacion
+      // para que el bot no 'olvide' lo que el usuario ya dijo en el proximo turno.
+      stateUpdate.currentProduct = detectedProduct;
+
       if (!explicitProductSelection) {
         return {
           activeProduct: null,
@@ -685,7 +689,6 @@ function resolveProductForTurn(text, sessionContext) {
         };
       }
 
-      stateUpdate.currentProduct = detectedProduct;
       return {
         activeProduct: detectedProduct,
         detectedProduct,
@@ -1071,7 +1074,9 @@ function detectImmediateHumanRoute({ normalizedText, preferredCategory, hits }) 
 
   if (preferredCategory === "falla_producto") {
     const bestScore = hits?.[0]?.score || 0;
-    const isWeakCandidate = !hasStrongAnswerCandidate(hits) && (hits.length < 3 || bestScore < 5);
+    // Bajamos la agresividad: si hay al menos un hit con puntaje decente (5.5),
+    // dejamos que el LLM intente resolver antes de derivar a humano.
+    const isWeakCandidate = !hasStrongAnswerCandidate(hits) && (hits.length === 0 || bestScore < 5.5);
     if (isWeakCandidate) {
       return "falla_producto";
     }
@@ -1504,19 +1509,13 @@ function appendResolutionCheck(replyText) {
 function buildHumanTriageReply({ route, activeProduct }) {
   const playbookConfig = findSupportTriageConfig(route);
   if (playbookConfig) {
-    const restrictionRule =
-      route === "equivocacion_envio"
-        ? "no_confirmar_envio"
-        : route === "devolucion" || route === "garantia_consulta" || route === "falla_producto"
-          ? "no_confirmar_garantia"
-          : null;
-
     return [
       activeProduct?.name ? `Producto en seguimiento: ${activeProduct.name}.` : null,
       playbookConfig.initialMessage || null,
-      playbookConfig.dataRequestMessage || null,
+      activeProduct
+        ? cleanProductRequestFromMessage(playbookConfig.dataRequestMessage || null)
+        : playbookConfig.dataRequestMessage || null,
       playbookConfig.humanCloseMessage || null,
-      // Se retiro aqui la devolucion de restrictionRule
     ]
       .filter(Boolean)
       .join("\n");
@@ -1564,11 +1563,12 @@ function buildHumanTriageReply({ route, activeProduct }) {
       .join("\n");
   }
 
+  // Falla de producto o default
   return [
     productLine,
     "Este caso necesita revision humana.",
     "Para que soporte tecnico lo revise, enviame:",
-    "1) Producto/modelo exacto.",
+    activeProduct ? null : "1) Producto/modelo exacto.",
     "2) Factura de la compra.",
     "3) Video mostrando la falla.",
     "4) Desde cuando comenzo a ocurrir el problema.",
@@ -1576,6 +1576,27 @@ function buildHumanTriageReply({ route, activeProduct }) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function cleanProductRequestFromMessage(message) {
+  if (!message) {
+    return null;
+  }
+
+  // Remove variations of "1) Producto/modelo exacto" or "1- Producto..."
+  // It handles list items anywhere in the text
+  return message
+    .replace(/[1-9]\)?\s*producto[\/\s]*modelo\s*(exacto|confirmame)?\.?,?\s*/gi, "")
+    .replace(/[1-9]\)?\s*(producto|modelo)\s*(exacto|confirmame)?\.?,?\s*/gi, "")
+    .replace(/(enviame|pasa|contame|deci|decime):\s*,\s*/gi, "$1: ")
+    .replace(/,\s*,/g, ",")
+    .replace(/:\s*,/g, ": ")
+    .replace(/:\s*2\)/g, ": 1)") // Renumber if we removed the first one
+    .replace(/,\s*2\)/g, ", 1)")
+    .replace(/3\)/g, "2)")
+    .replace(/4\)/g, "3)")
+    .replace(/5\)/g, "4)")
+    .trim();
 }
 
 function hasAssistantMessages(history) {
@@ -1618,7 +1639,8 @@ function isExplicitProductSelection(normalizedText, detectedMention) {
     return false;
   }
 
-  if (detectedMention.confidence === "high" && hasStrongProductCue(normalizedText)) {
+  // Si la confianza es alta o media y hay una pista fuerte del producto, lo tomamos como explicito.
+  if ((detectedMention.confidence === "high" || detectedMention.confidence === "medium") && hasStrongProductCue(normalizedText)) {
     return true;
   }
 
