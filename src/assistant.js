@@ -286,21 +286,9 @@ async function buildAssistantReply(userText, options = {}) {
     });
   }
 
-  if (hits.length === 0) {
-    return finalizeSupportReply({
-      replyText: buildKnowledgeFallbackReply(text, hits, activeProduct),
-      mode: "fallback-no-kb-hits",
-      hits,
-      styleExamples,
-      stateUpdate,
-      activeProduct,
-      detectedProduct: productResolution.detectedProduct,
-      hasAssistantHistory,
-      preferredCategory,
-      normalizedText,
-      allowResolutionCheck: false,
-    });
-  }
+  // Eliminamos el fallback prematuro (hits.length === 0)
+  // Ahora el LLM SIEMPRE recibe el turno, incluso si no hay manuales,
+  // para que use su conocimiento tecnico general como primer nivel de resolucion.
 
   const llm = getLLMClient();
   if (!llm) {
@@ -427,6 +415,10 @@ async function generateAIReply({
     })
     .join("\n\n---\n\n");
 
+  const finalContextText = contextText.trim() !== ""
+    ? contextText
+    : "No se encontraron casos ni manuales sobre esto. Usa estrictamente tu sentido común y conocimiento técnico general (hardware de audio, MIDI, PC/Mac) para dar al cliente un primer paso de diagnóstico corto y genérico. JAMÁS inventes políticas ni garantías de PC MIDI Center.";
+
   const styleText = styleExamples
     .map((example, index) => {
       const userSnippet = limitText(example.userText || "", 200);
@@ -463,7 +455,7 @@ async function generateAIReply({
     "- Casos historicos: conversaciones reales de WhatsApp y email entre clientes y soporte de PC MIDI Center. Contienen problemas reales ya resueltos.",
     "- Manuales tecnicos: fragmentos extraidos de manuales PDF oficiales de los fabricantes (por ejemplo Arturia). Pueden estar en ingles; tu trabajo es traducir esa informacion a pasos claros en espanol.",
     "- Ejemplos historicos de respuesta: pares de consulta-respuesta reales que muestran como respondio soporte en casos similares. Usalos como guia de tono y estructura, sin copiarlos textual.",
-    "Usa SOLO la informacion provista en estos bloques. No inventes datos, especificaciones, politicas ni procedimientos que no esten en las fuentes.",
+    "Usa la informacion de los manuales como LA VERDAD ABSOLUTA. Si no hay manuales o casos para la falla, usa tu conocimiento general global de Audio Pro, MIDI e interfaces para guiar al usuario. NO inventes especificaciones de un equipo si no lo tienes claro, y JAMAS inventes politicas de garantia o devolucion.",
     "",
     // ── 4. TONO Y ESTILO ──
     "- Usa espanol rioplatense natural (vos, decime, contame, fijate, probá). No uses usted ni un registro excesivamente formal.",
@@ -551,7 +543,7 @@ async function generateAIReply({
     userText,
     "",
     "Casos recuperados:",
-    contextText,
+    finalContextText,
     "",
     "Ejemplos historicos de soporte:",
     styleText || "No hay ejemplos historicos disponibles.",
