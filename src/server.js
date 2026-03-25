@@ -13,10 +13,14 @@ const { getProductCatalogInfo } = require('./product-catalog');
 const { startTurn, finishTurn, getSessionStoreInfo } = require('./conversation-state');
 const { getSupportPlaybookInfo } = require('./support-playbook');
 const { sendWhatsAppMessage, getKapsoStatus } = require('./kapso-client');
+const kbApiRouter = require('./routes/kb-api');
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// API routes
+app.use('/api/kb', kbApiRouter);
 
 const port = config.port;
 const mockSend = !config.whatsapp.accessToken && !process.env.KAPSO_API_KEY;
