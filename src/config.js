@@ -33,16 +33,16 @@ module.exports = {
   
   // WhatsApp Business API
   whatsapp: {
-    verifyToken: getEnv('WHATSAPP_VERIFY_TOKEN', '', true),
-    accessToken: getEnv('WHATSAPP_ACCESS_TOKEN', '', true),
-    phoneNumberId: getEnv('WHATSAPP_PHONE_NUMBER_ID', '', true),
-    appSecret: getEnv('WHATSAPP_APP_SECRET', '', true),
+    verifyToken: getEnv('WHATSAPP_VERIFY_TOKEN', ''),
+    accessToken: getEnv('WHATSAPP_ACCESS_TOKEN', ''),
+    phoneNumberId: getEnv('WHATSAPP_PHONE_NUMBER_ID', ''),
+    appSecret: getEnv('WHATSAPP_APP_SECRET', ''),
     mockSend: getBool('MOCK_WHATSAPP_SEND', false),
   },
   
   // OpenRouter / LLM
   llm: {
-    apiKey: getEnv('OPENROUTER_API_KEY') || getEnv('OPENAI_API_KEY', '', true),
+    apiKey: getEnv('OPENROUTER_API_KEY') || getEnv('OPENAI_API_KEY', ''),
     baseURL: getEnv('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
     model: getEnv('LLM_MODEL', 'google/gemini-2.5-flash-lite'),
     simpleModel: getEnv('LLM_SIMPLE_MODEL', 'google/gemini-2.5-flash-lite'),
