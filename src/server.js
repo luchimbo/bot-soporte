@@ -10,6 +10,12 @@ const config = require('./config');
 const { buildAssistantReply } = require('./assistant');
 const { getKnowledgeBaseInfo } = require('./knowledge-base');
 const { getProductCatalogInfo } = require('./product-catalog');
+const { 
+  lookupProductByModel, 
+  detectDrumModel, 
+  getConnectivityResponse,
+  getAllDrumKits 
+} = require('./product-kb-integration');
 const { startTurn, finishTurn, getSessionStoreInfo } = require('./conversation-state');
 const { getSupportPlaybookInfo } = require('./support-playbook');
 const { sendWhatsAppMessage, getKapsoStatus } = require('./kapso-client');
@@ -90,12 +96,31 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`[Webhook] Mensaje de ${from}: ${text.substring(0, 50)}...`);
 
+    // Detectar si el mensaje menciona un modelo de batería específico
+    const detectedDrumModel = detectDrumModel(text);
+    let kbProductInfo = null;
+    
+    if (detectedDrumModel) {
+      console.log(`[KB] Modelo detectado: ${detectedDrumModel}`);
+      kbProductInfo = lookupProductByModel(detectedDrumModel);
+      if (kbProductInfo) {
+        console.log(`[KB] Info encontrada para ${detectedDrumModel}`);
+      }
+    }
+
     // Generar respuesta
     const sessionId = from;
     const sessionContext = await startTurn(sessionId, text);
     
+    // Si detectamos un modelo y tenemos info en KB, la agregamos al contexto
+    const enhancedContext = {
+      ...sessionContext,
+      kbProductInfo: kbProductInfo,
+      detectedDrumModel: detectedDrumModel
+    };
+    
     const result = await buildAssistantReply(text, {
-      sessionContext,
+      sessionContext: enhancedContext,
       sessionId,
     });
 
@@ -156,6 +181,76 @@ app.post('/simulate', async (req, res) => {
   }
 });
 
+// API: Consultar producto por modelo
+app.get('/api/product/:modelo', (req, res) => {
+  try {
+    const modelo = req.params.modelo;
+    const info = lookupProductByModel(modelo);
+    
+    if (info) {
+      res.json({
+        success: true,
+        producto: info
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        error: `Producto ${modelo} no encontrado`
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// API: Listar todas las baterías
+app.get('/api/baterias', (req, res) => {
+  try {
+    const baterias = getAllDrumKits();
+    res.json({
+      success: true,
+      total: baterias.length,
+      baterias: baterias
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// API: Buscar productos
+app.get('/api/search', (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) {
+      return res.status(400).json({
+        success: false,
+        error: 'Parámetro q requerido'
+      });
+    }
+    
+    const { searchProducts } = require('./product-kb-integration');
+    const resultados = searchProducts(q);
+    
+    res.json({
+      success: true,
+      query: q,
+      total: resultados.length,
+      productos: resultados.slice(0, 10)
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Manejo de errores
 process.on('uncaughtException', (err) => {
   console.error('[Fatal] Uncaught Exception:', err.message);
@@ -171,8 +266,12 @@ const server = app.listen(port, () => {
   console.log(`📱 WhatsApp Webhook: http://localhost:${port}/webhook`);
   console.log(`🏥 Health Check: http://localhost:${port}/health`);
   console.log(`🧪 Simulación: http://localhost:${port}/simulate`);
+  console.log(`📦 API Productos: http://localhost:${port}/api/product/:modelo`);
+  console.log(`🥁 API Baterías: http://localhost:${port}/api/baterias`);
+  console.log(`🔍 API Búsqueda: http://localhost:${port}/api/search?q=termino`);
   console.log(`\n⚙️  Modo: ${mockSend ? 'MOCK (no envía mensajes reales)' : 'KAPSO'}`);
   console.log(`📋 Usando: ${process.env.KAPSO_API_KEY ? 'Kapso.ai' : 'API de Meta directa'}`);
+  console.log(`\n📚 Knowledge Base: 590 productos, 69 manuales, 278 FAQs`);
 });
 
 module.exports = { app, runtime };

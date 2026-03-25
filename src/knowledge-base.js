@@ -476,8 +476,137 @@ function normalize(text) {
     .trim();
 }
 
+// ============================================================================
+// NUEVO: Knowledge Base de Productos con Manuales
+// ============================================================================
+
+let productCache = null;
+
+function loadProductKnowledgeBase() {
+  if (productCache) return productCache;
+  
+  try {
+    const data = fs.readFileSync(resolveProjectPath(null, "data/base-conocimiento.json"), "utf8");
+    productCache = JSON.parse(data);
+    return productCache;
+  } catch (err) {
+    console.warn("No se pudo cargar base-conocimiento.json:", err.message);
+    return { productos: [], manuales_disponibles: {}, indice_por_modelo: {} };
+  }
+}
+
+// Buscar producto por modelo exacto
+function buscarProductoPorModelo(modelo) {
+  const kb = loadProductKnowledgeBase();
+  const upper = modelo.toUpperCase();
+  return kb.indice_por_modelo[upper] || [];
+}
+
+// Buscar producto por nombre (búsqueda flexible)
+function buscarProductoPorNombre(termino) {
+  const kb = loadProductKnowledgeBase();
+  const upper = termino.toUpperCase();
+  return kb.productos.filter(p => 
+    p.nombre.toUpperCase().includes(upper) ||
+    (p.modelo && p.modelo.toUpperCase().includes(upper))
+  );
+}
+
+// Obtener información completa de un producto
+function obtenerInfoProducto(modelo) {
+  const productos = buscarProductoPorModelo(modelo);
+  if (productos.length === 0) return null;
+  
+  const p = productos[0];
+  const conectividad = [];
+  if (p.especificaciones.usb) conectividad.push('USB');
+  if (p.especificaciones.midi) conectividad.push('MIDI');
+  if (p.especificaciones.bluetooth) conectividad.push('Bluetooth');
+  
+  return {
+    nombre: p.nombre,
+    modelo: p.modelo,
+    tipo: p.tipo,
+    marca: p.marca,
+    descripcion: p.descripcion,
+    conectividad: conectividad.join(' + ') || 'No especificada',
+    requiere_drivers: p.especificaciones.drivers,
+    alimentacion: p.especificaciones.alimentacion,
+    manuales: p.manuales,
+    tiene_manuales: p.manuales.length > 0
+  };
+}
+
+// Listar todos los modelos de baterías
+function listarBaterias() {
+  const kb = loadProductKnowledgeBase();
+  return kb.productos
+    .filter(p => p.tipo === 'Batería Electrónica')
+    .map(p => ({
+      modelo: p.modelo,
+      nombre: p.nombre,
+      conectividad: [p.especificaciones.usb && 'USB', p.especificaciones.midi && 'MIDI', p.especificaciones.bluetooth && 'Bluetooth'].filter(Boolean).join(' + ') || 'No especificada',
+      tiene_manuales: p.manuales.length > 0
+    }));
+}
+
+// Obtener manuales de un producto
+function obtenerManuales(modelo) {
+  const productos = buscarProductoPorModelo(modelo);
+  if (productos.length === 0) return [];
+  return productos[0].manuales;
+}
+
+// Formatear respuesta sobre un producto para el bot
+function formatearRespuestaProducto(modelo) {
+  const info = obtenerInfoProducto(modelo);
+  if (!info) return null;
+  
+  let respuesta = `📦 **${info.nombre}**\n\n`;
+  respuesta += `📝 **Descripción:** ${info.descripcion.substring(0, 300)}...\n\n`;
+  respuesta += `🔌 **Conectividad:** ${info.conectividad}\n`;
+  respuesta += `💿 **Drivers:** ${info.requiere_drivers}\n`;
+  
+  if (info.tiene_manuales) {
+    respuesta += `\n📚 **Manuales disponibles:**\n`;
+    info.manuales.forEach((m, i) => {
+      respuesta += `${i + 1}. ${m.archivo}\n`;
+    });
+  }
+  
+  return respuesta;
+}
+
+// Buscar en toda la base de conocimiento (productos + documentos)
+function busquedaCompleta(query, options = {}) {
+  const resultados = {
+    productos: [],
+    documentos: [],
+    respuestas_historicas: []
+  };
+  
+  // Buscar en productos
+  resultados.productos = buscarProductoPorNombre(query);
+  
+  // Buscar en knowledge base existente
+  resultados.documentos = searchKnowledgeBase(query, options.topK || 5, options);
+  
+  // Buscar respuestas históricas
+  resultados.respuestas_historicas = searchHistoricalResponses(query, options.topK || 3, options.preferredCategory, options);
+  
+  return resultados;
+}
+
 module.exports = {
   searchKnowledgeBase,
   searchHistoricalResponses,
   getKnowledgeBaseInfo,
+  // Nuevas funciones
+  buscarProductoPorModelo,
+  buscarProductoPorNombre,
+  obtenerInfoProducto,
+  listarBaterias,
+  obtenerManuales,
+  formatearRespuestaProducto,
+  busquedaCompleta
 };
