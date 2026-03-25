@@ -243,10 +243,42 @@ const policyRows = [
   ["pol_005", true, "tono_general", "restriccion", "Resolver lo maximo posible sin improvisar politicas, garantias ni promesas de postventa."],
 ];
 
+const productSpecsRows = [
+  [
+    "id",
+    "activo",
+    "marca",
+    "producto",
+    "producto_aliases",
+    "family_key",
+    "variant_policy",
+    "is_primary_model",
+    "se_conecta_a_pc",
+    "es_controlador_midi",
+    "envia_midi_por_usb",
+    "envia_audio_por_usb",
+    "requiere_driver",
+    "class_compliant",
+    "tiene_parlantes",
+    "salida_audio",
+    "salida_mono",
+    "notas_tecnicas",
+    "respuesta_pc",
+    "respuesta_midi",
+    "respuesta_audio_usb",
+    "respuesta_driver",
+    "respuesta_parlantes",
+    "respuesta_salida_audio",
+    "link_apoyo",
+    "observaciones",
+  ],
+];
+
 const workbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(faqRows), "faq_respuestas");
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(triageRows), "triage_humano");
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(policyRows), "politicas_bot");
+XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(productSpecsRows), "product_specs");
 XLSX.writeFile(workbook, outputPath);
 
 console.log(`Template creado en ${outputPath}`);

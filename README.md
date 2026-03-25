@@ -29,6 +29,7 @@ Variables utiles:
 - `PRODUCT_CATALOG_FILE=archivos/Productos.xlsx`: catalogo para bloquear producto en chat.
 - `TIENDANUBE_CATALOG_FILE=archivos/tiendanube-...csv`: catalogo exportado de Tiendanube para enriquecer aliases, categorias y slugs del matcher de producto.
 - `SUPPORT_PLAYBOOK_FILE=archivos/SoporteBot.xlsx`: workbook con `faq_respuestas`, `triage_humano` y `politicas_bot`.
+- `SUPPORT_PLAYBOOK_FILE=archivos/SoporteBot.xlsx`: workbook con `faq_respuestas`, `triage_humano`, `politicas_bot` y `product_specs`.
 - `LLM_SIMPLE_MODEL` / `LLM_COMPLEX_MODEL`: permite rutear consultas simples a un modelo barato y troubleshooting tecnico a uno mas capaz.
 
 El playbook de soporte se usa asi:

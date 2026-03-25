@@ -10,9 +10,16 @@ const {
   searchSupportFaq,
   findSupportTriageConfig,
   matchSupportTriage,
+  findProductSpecs,
+  findProductFeature,
   getSupportPolicyText,
   getSupportPolicyTextsByType,
 } = require("./support-playbook");
+const {
+  classifyIntent,
+  isCapabilityQuery,
+  isProblemQuery,
+} = require("./intent-classifier");
 
 const topK = Number(process.env.KB_TOP_K || 4);
 const styleTopK = Number(process.env.STYLE_TOP_K || 3);
@@ -195,6 +202,121 @@ async function buildAssistantReply(userText, options = {}) {
     stateUpdate.currentProduct = activeProduct;
   }
 
+  // === CLASIFICACIÓN INTELIGENTE DE INTENCIONES ===
+  // Usar LLM para clasificar el tipo de consulta antes de buscar fuentes
+  let intentClassification = null;
+  try {
+    intentClassification = await classifyIntent(text, activeProduct);
+    console.log(`[Intent] Consulta clasificada como: ${intentClassification.intent} (confianza: ${intentClassification.confidence})`);
+  } catch (error) {
+    console.error('[Intent] Error en clasificación:', error.message);
+    // Fallback a detección simple
+    if (isCapabilityQuery(text)) {
+      intentClassification = { intent: 'capability_query', confidence: 0.7 };
+    } else if (isProblemQuery(text)) {
+      intentClassification = { intent: 'problem_diagnosis', confidence: 0.8 };
+    } else {
+      intentClassification = { intent: 'general_info', confidence: 0.6 };
+    }
+  }
+
+  // Si es consulta de capacidad y hay producto activo, buscar en specs primero
+  if (intentClassification.intent === 'capability_query' && activeProduct) {
+    const featureMatch = findProductFeature({
+      activeProduct,
+      userText: text,
+    });
+
+    if (featureMatch) {
+      const greeting = !hasAssistantHistory
+        ? getSupportPolicyText("presentacion_bot", "Hola. Soy un asistente virtual de soporte de PC MIDI Center.")
+        : "";
+      const hours = getSupportPolicyText("horario_humano", "Si hace falta intervencion humana, el equipo responde de 9 a 14 hs.");
+      const greetingText = greeting ? `${greeting}\n${hours}\n\n` : "";
+
+      return {
+        text: greetingText + featureMatch.answer,
+        mode: "product-specs",
+        hits: [],
+        styleExamples: [],
+        stateUpdate: {
+          ...stateUpdate,
+          lastIntent: "feature_query",
+        },
+        activeProduct,
+        detectedProduct: productResolution.detectedProduct,
+      };
+    }
+
+    // Intentar con capabilityIntent tradicional si featureMatch no encontró
+    const capabilityIntent = detectCapabilityIntent(normalizedText);
+    if (capabilityIntent) {
+      const specsMatch = findProductSpecs({
+        activeProduct,
+        userText: text,
+      });
+
+      const capabilityReply = buildCapabilityResponse({
+        activeProduct,
+        specsMatch,
+        capabilityIntent,
+        hasAssistantHistory,
+      });
+
+      if (capabilityReply) {
+        return {
+          text: capabilityReply,
+          mode: "product-specs",
+          hits: [],
+          styleExamples: [],
+          stateUpdate: {
+            ...stateUpdate,
+            lastIntent: capabilityIntent.intent,
+          },
+          activeProduct,
+          detectedProduct: productResolution.detectedProduct,
+        };
+      }
+    }
+  }
+
+  // Si es problema técnico, buscar FAQs de troubleshooting primero
+  if (intentClassification.intent === 'problem_diagnosis' && activeProduct) {
+    const problemFaqHits = searchSupportFaq({
+      userText: text,
+      activeProduct,
+      preferredCategory: 'faq_configuracion',
+      topK: 2,
+    });
+
+    if (problemFaqHits.length > 0 && problemFaqHits[0].confidence > 0.75) {
+      return buildFaqPlaybookResponse({
+        faqMatch: problemFaqHits[0],
+        activeProduct,
+        stateUpdate: { ...stateUpdate, lastIntent: 'problem_diagnosis' },
+        hasAssistantHistory,
+        detectedProduct: productResolution.detectedProduct,
+      });
+    }
+
+    // Si no hay FAQ específica, ir directo a triage para problemas técnicos
+    const triageMatch = matchSupportTriage({
+      normalizedText,
+      preferredCategory: 'falla_producto',
+    });
+
+    if (triageMatch) {
+      return buildHumanTriageResponse({
+        route: triageMatch.category,
+        activeProduct,
+        stateUpdate: { ...stateUpdate, lastIntent: 'problem_diagnosis' },
+        hasAssistantHistory,
+        detectedProduct: productResolution.detectedProduct,
+      });
+    }
+  }
+
+  // Mensaje de solo producto sin problema específico
   if (activeProduct && looksLikeProductOnlyMessage(normalizedText, activeProduct)) {
     return {
       text: maybePrependSupportIntro(
@@ -1173,6 +1295,34 @@ function buildFaqPlaybookResponse({ faqMatch, activeProduct, stateUpdate, hasAss
   };
 }
 
+function buildCapabilityResponse({ activeProduct, specsMatch, capabilityIntent, hasAssistantHistory }) {
+  if (!capabilityIntent) {
+    return null;
+  }
+
+  if (!specsMatch) {
+    return maybePrependSupportIntro(capabilityIntent.fallback, hasAssistantHistory);
+  }
+
+  const explicitReply = cleanCapabilityReply(specsMatch[capabilityIntent.replyField]);
+  if (explicitReply) {
+    return maybePrependSupportIntro(appendLinkIfNeeded(explicitReply, specsMatch.supportLink), hasAssistantHistory);
+  }
+
+  const value = specsMatch[capabilityIntent.valueField];
+  const generated = capabilityIntent.formatter({
+    value,
+    activeProduct,
+    specsMatch,
+  });
+
+  if (generated) {
+    return maybePrependSupportIntro(appendLinkIfNeeded(generated, specsMatch.supportLink), hasAssistantHistory);
+  }
+
+  return maybePrependSupportIntro(capabilityIntent.fallback, hasAssistantHistory);
+}
+
 function resolveHandoffRoute(preferredCategory, normalizedText) {
   if (/equivoc|envio incorrecto|producto equivocado|me llego otro|llego otro|enviaste otro|pedido incorrecto/.test(normalizedText)) {
     return "equivocacion_envio";
@@ -1345,6 +1495,81 @@ function detectIntentFromText(text) {
   }
 
   return "consulta_general";
+}
+
+function detectCapabilityIntent(normalizedText) {
+  const value = String(normalizedText || "");
+  if (!value) {
+    return null;
+  }
+
+  if (/\b(parlante|parlantes|speaker|speakers)\b/.test(value)) {
+    return {
+      intent: "spec_speakers",
+      replyField: "replySpeakers",
+      valueField: "hasSpeakers",
+      formatter: formatSpeakersAnswer,
+      fallback:
+        "No tengo confirmacion tecnica suficiente sobre si ese equipo tiene parlantes integrados. Si queres, lo reviso con una persona del equipo.",
+    };
+  }
+
+  if (/\b(mono|un solo parlante|sale de un lado|salida mono)\b/.test(value)) {
+    return {
+      intent: "spec_mono_output",
+      replyField: "replyAudioOutput",
+      valueField: "monoOutput",
+      formatter: formatMonoOutputAnswer,
+      fallback:
+        "No tengo confirmacion tecnica suficiente sobre el tipo de salida de audio de ese equipo. Si queres, lo reviso con una persona del equipo.",
+    };
+  }
+
+  if (/(controlador midi|manda midi|envia midi|envía midi|midi por usb)/.test(value)) {
+    return {
+      intent: "spec_midi_usb",
+      replyField: "replyMidi",
+      valueField: "sendsMidiUsb",
+      formatter: formatMidiOverUsbAnswer,
+      fallback:
+        "No tengo confirmacion tecnica suficiente sobre el envio de MIDI por USB en ese equipo. Si queres, lo reviso con una persona del equipo.",
+    };
+  }
+
+  if (/(audio por usb|sale audio por usb|manda audio por usb|interfaz de audio|placa de sonido)/.test(value)) {
+    return {
+      intent: "spec_audio_usb",
+      replyField: "replyAudioUsb",
+      valueField: "sendsAudioUsb",
+      formatter: formatAudioOverUsbAnswer,
+      fallback:
+        "No tengo confirmacion tecnica suficiente sobre el envio de audio por USB en ese equipo. Si queres, lo reviso con una persona del equipo.",
+    };
+  }
+
+  if (/(driver|drivers|requiere driver|instalar driver|controlador)/.test(value)) {
+    return {
+      intent: "spec_driver",
+      replyField: "replyDriver",
+      valueField: "requiresDriver",
+      formatter: formatDriverAnswer,
+      fallback:
+        "No tengo confirmacion tecnica suficiente sobre si ese equipo requiere driver. Si queres, lo reviso con una persona del equipo.",
+    };
+  }
+
+  if (/(pc|computadora|compu|notebook|laptop|mac|windows|conectar a la pc|conecta a la pc|usb a la pc)/.test(value)) {
+    return {
+      intent: "spec_connect_pc",
+      replyField: "replyPc",
+      valueField: "connectsToPc",
+      formatter: formatConnectPcAnswer,
+      fallback:
+        "No tengo confirmacion tecnica suficiente sobre la conexion a computadora de ese equipo. Si queres, lo reviso con una persona del equipo.",
+    };
+  }
+
+  return null;
 }
 
 function isSameOrCompatibleProduct(left, right) {
@@ -1621,6 +1846,120 @@ function buildSupportGreetingPrefix() {
   );
 
   return [intro, humanHours].filter(Boolean).join("\n");
+}
+
+function cleanCapabilityReply(value) {
+  const text = String(value || "").trim();
+  return text || null;
+}
+
+function appendLinkIfNeeded(text, supportLink) {
+  if (!supportLink) {
+    return text;
+  }
+
+  if (String(text || "").includes(String(supportLink))) {
+    return text;
+  }
+
+  return [text, `Link de apoyo: ${supportLink}`].filter(Boolean).join("\n");
+}
+
+function formatBooleanAnswer({ value, activeProduct, specsMatch, positiveLine, negativeLine, unknownLine }) {
+  const productName = activeProduct?.name || specsMatch?.product || "ese equipo";
+  if (value === "true") {
+    return positiveLine(productName, specsMatch);
+  }
+
+  if (value === "false") {
+    return negativeLine(productName, specsMatch);
+  }
+
+  return unknownLine(productName, specsMatch);
+}
+
+function formatConnectPcAnswer({ value, activeProduct, specsMatch }) {
+  return formatBooleanAnswer({
+    value,
+    activeProduct,
+    specsMatch,
+    positiveLine: (productName, row) => {
+      const midiDetail = row?.sendsMidiUsb === "true" ? " y puede intercambiar MIDI por USB" : "";
+      const audioDetail = row?.sendsAudioUsb === "true" ? " Tambien puede enviar audio por USB." : "";
+      return `Si, ${productName} se puede conectar a una computadora.${midiDetail}${audioDetail}`.trim();
+    },
+    negativeLine: (productName) => `No, ${productName} no esta pensado para conectarse a una computadora como dispositivo USB.`,
+    unknownLine: (_productName) => null,
+  });
+}
+
+function formatMidiOverUsbAnswer({ value, activeProduct, specsMatch }) {
+  return formatBooleanAnswer({
+    value,
+    activeProduct,
+    specsMatch,
+    positiveLine: (productName) => `Si, ${productName} puede enviar MIDI por USB.`,
+    negativeLine: (productName) => `No, ${productName} no envia MIDI por USB.`,
+    unknownLine: (_productName) => null,
+  });
+}
+
+function formatAudioOverUsbAnswer({ value, activeProduct, specsMatch }) {
+  return formatBooleanAnswer({
+    value,
+    activeProduct,
+    specsMatch,
+    positiveLine: (productName) => `Si, ${productName} puede enviar audio por USB.`,
+    negativeLine: (productName) => `No, ${productName} no envia audio por USB.`,
+    unknownLine: (_productName) => null,
+  });
+}
+
+function formatDriverAnswer({ value, activeProduct, specsMatch }) {
+  return formatBooleanAnswer({
+    value,
+    activeProduct,
+    specsMatch,
+    positiveLine: (productName, row) => {
+      const classCompliantLine = row?.classCompliant === "true" ? " Ademas figura como class compliant." : "";
+      return `Si, ${productName} requiere driver.${classCompliantLine}`.trim();
+    },
+    negativeLine: (productName, row) => {
+      const classCompliantLine = row?.classCompliant === "true" ? " Figura como class compliant." : "";
+      return `No, ${productName} no requiere driver especifico.${classCompliantLine}`.trim();
+    },
+    unknownLine: (_productName) => null,
+  });
+}
+
+function formatMonoOutputAnswer({ value, activeProduct, specsMatch }) {
+  return formatBooleanAnswer({
+    value,
+    activeProduct,
+    specsMatch,
+    positiveLine: (productName) => `Si, ${productName} tiene salida mono.`,
+    negativeLine: (productName, row) => {
+      if (row?.audioOutput) {
+        return `No, ${productName} no es mono. La salida indicada es: ${row.audioOutput}.`;
+      }
+      return `No, ${productName} no tiene salida mono.`;
+    },
+    unknownLine: (_productName) => null,
+  });
+}
+
+function formatSpeakersAnswer({ value, activeProduct, specsMatch }) {
+  return formatBooleanAnswer({
+    value,
+    activeProduct,
+    specsMatch,
+    positiveLine: (productName, row) => {
+      const monoLine = row?.monoOutput === "true" ? " La salida es mono." : "";
+      return `Si, ${productName} tiene parlantes integrados.${monoLine}`.trim();
+    },
+    negativeLine: (productName) => `No, ${productName} no tiene parlantes integrados.`,
+    unknownLine: (_productName) => null,
+  });
 }
 
 function isExplicitProductSelection(normalizedText, detectedMention) {

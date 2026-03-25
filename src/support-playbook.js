@@ -32,6 +32,25 @@ const headerAliases = {
   rule: ["regla", "rule"],
   type: ["tipo", "type"],
   text: ["texto", "text"],
+  familyKey: ["family_key", "familykey", "clave_familia"],
+  variantPolicy: ["variant_policy", "politica_variante"],
+  isPrimaryModel: ["is_primary_model", "modelo_principal"],
+  connectsToPc: ["se_conecta_a_pc", "connects_to_pc"],
+  midiController: ["es_controlador_midi", "is_midi_controller"],
+  sendsMidiUsb: ["envia_midi_por_usb", "sends_midi_over_usb"],
+  sendsAudioUsb: ["envia_audio_por_usb", "sends_audio_over_usb"],
+  requiresDriver: ["requiere_driver", "requires_driver"],
+  classCompliant: ["class_compliant", "es_class_compliant"],
+  hasSpeakers: ["tiene_parlantes", "has_speakers"],
+  audioOutput: ["salida_audio", "audio_output"],
+  monoOutput: ["salida_mono", "mono_output"],
+  technicalNotes: ["notas_tecnicas", "technical_notes"],
+  replyPc: ["respuesta_pc", "reply_pc"],
+  replyMidi: ["respuesta_midi", "reply_midi"],
+  replyAudioUsb: ["respuesta_audio_usb", "reply_audio_usb"],
+  replyDriver: ["respuesta_driver", "reply_driver"],
+  replySpeakers: ["respuesta_parlantes", "reply_speakers"],
+  replyAudioOutput: ["respuesta_salida_audio", "reply_audio_output"],
 };
 
 let cache = {
@@ -41,6 +60,7 @@ let cache = {
   faqRows: [],
   triageRows: [],
   policyRows: [],
+  productSpecsRows: [],
 };
 
 function resolveDefaultPlaybookPath() {
@@ -143,6 +163,7 @@ function getSupportPlaybookInfo() {
     faqRows: playbook.faqRows.length,
     triageRows: playbook.triageRows.length,
     policyRows: playbook.policyRows.length,
+    productSpecsRows: playbook.productSpecsRows.length,
   };
 }
 
@@ -162,6 +183,7 @@ function loadSupportPlaybook() {
       faqRows: [],
       triageRows: [],
       policyRows: [],
+      productSpecsRows: [],
     };
     return cache;
   }
@@ -180,6 +202,7 @@ function loadSupportPlaybook() {
     faqRows: parseFaqSheet(readSheet(workbook, "faq_respuestas")),
     triageRows: parseTriageSheet(readSheet(workbook, "triage_humano")),
     policyRows: parsePolicySheet(readSheet(workbook, "politicas_bot")),
+    productSpecsRows: parseProductSpecsSheet(readSheet(workbook, "product_specs")),
   };
 
   return cache;
@@ -278,6 +301,309 @@ function parsePolicySheet(rows) {
       };
     })
     .filter(Boolean);
+}
+
+function parseProductSpecsSheet(rows) {
+  return rows
+    .map((row, index) => {
+      if (!isRowActive(readField(row, "active"))) {
+        return null;
+      }
+
+      const product = cleanText(readField(row, "product"));
+      const familyKey = cleanText(readField(row, "familyKey")) || buildFamilyKey(normalize(product));
+      if (!product && !familyKey) {
+        return null;
+      }
+
+      return {
+        id: readField(row, "id") || `product_specs_${index + 1}`,
+        brand: cleanText(readField(row, "brand")) || null,
+        product,
+        productNormalized: normalize(product),
+        productAliases: splitMulti(readField(row, "productAliases")).map(normalize),
+        familyKey: normalize(familyKey),
+        variantPolicy: cleanText(readField(row, "variantPolicy")) || "cosmetic",
+        isPrimaryModel: parseBoolean(readField(row, "isPrimaryModel"), false),
+        connectsToPc: parseTriState(readField(row, "connectsToPc")),
+        midiController: parseTriState(readField(row, "midiController")),
+        sendsMidiUsb: parseTriState(readField(row, "sendsMidiUsb")),
+        sendsAudioUsb: parseTriState(readField(row, "sendsAudioUsb")),
+        requiresDriver: parseTriState(readField(row, "requiresDriver")),
+        classCompliant: parseTriState(readField(row, "classCompliant")),
+        hasSpeakers: parseTriState(readField(row, "hasSpeakers")),
+        audioOutput: cleanText(readField(row, "audioOutput")) || null,
+        monoOutput: parseTriState(readField(row, "monoOutput")),
+        technicalNotes: cleanText(readField(row, "technicalNotes")) || null,
+        replyPc: cleanText(readField(row, "replyPc")) || null,
+        replyMidi: cleanText(readField(row, "replyMidi")) || null,
+        replyAudioUsb: cleanText(readField(row, "replyAudioUsb")) || null,
+        replyDriver: cleanText(readField(row, "replyDriver")) || null,
+        replySpeakers: cleanText(readField(row, "replySpeakers")) || null,
+        replyAudioOutput: cleanText(readField(row, "replyAudioOutput")) || null,
+        supportLink: cleanText(readField(row, "supportLink")) || null,
+        notes: cleanText(readField(row, "notes")) || null,
+      };
+    })
+    .filter(Boolean);
+}
+
+function findProductSpecs({ activeProduct = null, userText = "" } = {}) {
+  const playbook = loadSupportPlaybook();
+  if (playbook.productSpecsRows.length === 0) {
+    return null;
+  }
+
+  const normalizedText = normalize(userText);
+  const normalizedActiveName = normalize(activeProduct?.normalizedName || activeProduct?.name || "");
+  const activeFamilyKey = normalize(activeProduct?.familyKey || buildFamilyKey(normalizedActiveName));
+
+  let exactMatch = null;
+  let familyPrimary = null;
+  let familyAny = null;
+
+  for (const row of playbook.productSpecsRows) {
+    if (normalizedActiveName && row.productNormalized && row.productNormalized === normalizedActiveName) {
+      exactMatch = row;
+      break;
+    }
+
+    if (normalizedText) {
+      const aliases = [row.productNormalized, ...row.productAliases].filter(Boolean);
+      if (aliases.some((alias) => alias && normalizedText.includes(alias))) {
+        exactMatch = exactMatch || row;
+      }
+    }
+
+    if (activeFamilyKey && row.familyKey && row.familyKey === activeFamilyKey) {
+      if (row.isPrimaryModel) {
+        familyPrimary = familyPrimary || row;
+      }
+      familyAny = familyAny || row;
+    }
+  }
+
+  return exactMatch || familyPrimary || familyAny || null;
+}
+
+function findProductFeature({ activeProduct = null, userText = "" } = {}) {
+  const spec = findProductSpecs({ activeProduct, userText });
+  if (!spec || !spec.technicalNotes) {
+    return null;
+  }
+
+  const normalizedText = normalize(userText);
+  const notes = spec.technicalNotes.toLowerCase();
+  
+  // Mapeo de características con palabras clave y templates de respuesta
+  const featureMap = {
+    // Conectividad
+    'bluetooth': {
+      keywords: ['bluetooth', 'inalambrico', 'wireless'],
+      positiveTemplate: 'Sí, el ${product} cuenta con conectividad Bluetooth para comunicación inalámbrica.',
+      negativeTemplate: 'No, el ${product} no tiene Bluetooth, se conecta mediante cables.'
+    },
+    'usb-c': {
+      keywords: ['usb-c', 'usb c', 'type-c'],
+      positiveTemplate: 'Sí, el ${product} utiliza conexión USB-C.',
+      negativeTemplate: 'No, el ${product} no usa USB-C.'
+    },
+    'midi': {
+      keywords: ['midi'],
+      positiveTemplate: 'Sí, el ${product} es compatible con MIDI para control de instrumentos.',
+      negativeTemplate: 'No, el ${product} no tiene capacidad MIDI.'
+    },
+    'cv': {
+      keywords: ['cv', 'cv/gate', 'gate'],
+      positiveTemplate: 'Sí, el ${product} incluye salidas CV/Gate para controlar sintetizadores analógicos.',
+      negativeTemplate: 'No, el ${product} no tiene salidas CV/Gate.'
+    },
+    
+    // Características de controladores
+    'aftertouch': {
+      keywords: ['aftertouch', 'after touch'],
+      positiveTemplate: 'Sí, el ${product} tiene aftertouch (sensibilidad a la presión después de pulsar la tecla).',
+      negativeTemplate: 'No, el ${product} no incluye aftertouch.'
+    },
+    'velocity': {
+      keywords: ['velocity', 'sensible', 'sensibles'],
+      positiveTemplate: 'Sí, el ${product} tiene teclas sensibles a la velocidad (velocity sensitive).',
+      negativeTemplate: 'No, el ${product} no tiene sensibilidad a la velocidad.'
+    },
+    'secuenciador': {
+      keywords: ['secuenciador', 'sequencer'],
+      positiveTemplate: 'Sí, el ${product} incluye un secuenciador integrado para crear patrones musicales.',
+      negativeTemplate: 'No, el ${product} no tiene secuenciador incorporado.'
+    },
+    'arpegiador': {
+      keywords: ['arpegiador', 'arpeggiator'],
+      positiveTemplate: 'Sí, el ${product} cuenta con arpegiador para generar secuencias automáticas de notas.',
+      negativeTemplate: 'No, el ${product} no incluye arpegiador.'
+    },
+    
+    // Interfaces
+    'phantom': {
+      keywords: ['phantom power', 'phantom', '48v', '48 v'],
+      positiveTemplate: 'Sí, el ${product} incluye alimentación phantom de 48V para micrófonos condensador.',
+      negativeTemplate: 'No, el ${product} no tiene alimentación phantom.'
+    },
+    'phantom power': {
+      keywords: ['phantom power', 'phantom', '48v', '48 v'],
+      positiveTemplate: 'Sí, el ${product} incluye alimentación phantom de 48V para micrófonos condensador.',
+      negativeTemplate: 'No, el ${product} no tiene alimentación phantom.'
+    },
+    'loopback': {
+      keywords: ['loopback'],
+      positiveTemplate: 'Sí, el ${product} tiene función loopback para grabar el audio del sistema.',
+      negativeTemplate: 'No, el ${product} no incluye loopback.'
+    },
+    'dsp': {
+      keywords: ['dsp'],
+      positiveTemplate: 'Sí, el ${product} incluye procesamiento DSP (Digital Signal Processing) integrado.',
+      negativeTemplate: 'No, el ${product} no tiene DSP integrado.'
+    },
+    
+    // Sintetizadores
+    'vocoder': {
+      keywords: ['vocoder'],
+      positiveTemplate: 'Sí, el ${product} incluye un vocoder para efectos de voz sintetizada.',
+      negativeTemplate: 'No, el ${product} no tiene vocoder.'
+    },
+    'parlantes': {
+      keywords: ['parlantes', 'altavoces', 'speakers'],
+      positiveTemplate: 'Sí, el ${product} tiene parlantes integrados para monitoreo.',
+      negativeTemplate: 'No, el ${product} no incluye parlantes integrados.'
+    },
+    
+    // Micrófonos
+    'condensador': {
+      keywords: ['condensador', 'condenser'],
+      positiveTemplate: 'Sí, el ${product} es un micrófono de condensador con diafragma sensible.',
+      negativeTemplate: 'No, el ${product} no es de condensador.'
+    },
+    'dinamico': {
+      keywords: ['dinamico', 'dynamic'],
+      positiveTemplate: 'Sí, el ${product} es un micrófono dinámico, ideal para uso en vivo.',
+      negativeTemplate: 'No, el ${product} no es dinámico.'
+    },
+    'cardioide': {
+      keywords: ['cardioide', 'cardioid'],
+      positiveTemplate: 'Sí, el ${product} tiene patrón polar cardioide que captura sonido frontal.',
+      negativeTemplate: 'No, el ${product} no tiene patrón cardioide.'
+    },
+    'diafragma': {
+      keywords: ['diafragma'],
+      positiveTemplate: 'Sí, el ${product} cuenta con diafragma grande para mejor captación de frecuencias.',
+      negativeTemplate: 'No, el ${product} no especifica diafragma.'
+    },
+    
+    // Baterías
+    'mesh': {
+      keywords: ['mesh'],
+      positiveTemplate: 'Sí, los pads del ${product} son de malla (mesh) para sensación más realista.',
+      negativeTemplate: 'No, el ${product} no tiene pads mesh.'
+    },
+    
+    // Auriculares
+    'drivers': {
+      keywords: ['drivers'],
+      positiveTemplate: 'Sí, el ${product} especifica el tamaño de sus drivers en las características técnicas.',
+      negativeTemplate: 'No tengo información específica sobre los drivers del ${product}.'
+    },
+    'cerrado': {
+      keywords: ['cerrado', 'closed'],
+      positiveTemplate: 'Sí, el ${product} tiene diseño cerrado (closed-back) para aislamiento sonoro.',
+      negativeTemplate: 'No, el ${product} no es de diseño cerrado.'
+    },
+    'abierto': {
+      keywords: ['abierto', 'open'],
+      positiveTemplate: 'Sí, el ${product} tiene diseño abierto (open-back) para campo sonoro más natural.',
+      negativeTemplate: 'No, el ${product} no es de diseño abierto.'
+    },
+  };
+  
+  // Buscar qué característica se está preguntando
+  for (const [feature, config] of Object.entries(featureMap)) {
+    if (normalizedText.includes(feature)) {
+      const hasFeature = config.keywords.some(kw => notes.includes(kw));
+      const productName = formatProductName(spec.product);
+      
+      if (hasFeature) {
+        // Generar respuesta positiva con contexto adicional
+        let answer = config.positiveTemplate.replace('${product}', productName);
+        
+        // Agregar información adicional de las notas técnicas si es relevante
+        const additionalInfo = extractAdditionalContext(notes, feature);
+        if (additionalInfo) {
+          answer += ' ' + additionalInfo;
+        }
+        
+        return {
+          spec,
+          feature,
+          hasFeature: true,
+          answer: answer,
+          details: [feature]
+        };
+      } else {
+        return {
+          spec,
+          feature,
+          hasFeature: false,
+          answer: config.negativeTemplate.replace('${product}', productName),
+          details: []
+        };
+      }
+    }
+  }
+  
+  return null;
+}
+
+function formatProductName(product) {
+  // Convertir nombre de producto a formato más legible
+  return product
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function extractAdditionalContext(notes, feature) {
+  // Extraer información adicional relevante de las notas técnicas
+  const notesLower = notes.toLowerCase();
+  
+  // Contextos específicos por característica
+  const contexts = {
+    'secuenciador': () => {
+      const stepsMatch = notesLower.match(/(\d+)\s*(pasos?|steps?|paso)/);
+      if (stepsMatch) return `Tiene ${stepsMatch[1]} pasos.`;
+      return '';
+    },
+    'arpegiador': () => {
+      if (notesLower.includes('modos') || notesLower.includes('patterns')) {
+        return 'Incluye múltiples modos y patrones.';
+      }
+      return '';
+    },
+    'phantom': () => {
+      if (notesLower.includes('48v')) return 'Proporciona 48V estándar.';
+      return '';
+    },
+    'condensador': () => {
+      if (notesLower.includes('diafragma')) return 'Cuenta con diafragma de gran tamaño.';
+      return '';
+    },
+    'mesh': () => {
+      return 'La malla proporciona mejor respuesta y durabilidad.';
+    }
+  };
+  
+  if (contexts[feature]) {
+    return contexts[feature]();
+  }
+  
+  return '';
 }
 
 function readSheet(workbook, targetName) {
@@ -442,6 +768,23 @@ function parseBoolean(value, fallback = false) {
   return ["true", "1", "si", "sí", "yes", "x"].includes(raw);
 }
 
+function parseTriState(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) {
+    return "unknown";
+  }
+
+  if (["true", "1", "si", "sí", "yes", "x"].includes(raw)) {
+    return "true";
+  }
+
+  if (["false", "0", "no", "n"].includes(raw)) {
+    return "false";
+  }
+
+  return "unknown";
+}
+
 function parseConfidence(value, fallback = 0.72) {
   const parsed = Number(String(value || "").replace(",", "."));
   if (!Number.isFinite(parsed)) {
@@ -575,6 +918,8 @@ module.exports = {
   searchSupportFaq,
   findSupportTriageConfig,
   matchSupportTriage,
+  findProductSpecs,
+  findProductFeature,
   getSupportPolicyText,
   getSupportPolicyTextsByType,
   getSupportPlaybookInfo,
