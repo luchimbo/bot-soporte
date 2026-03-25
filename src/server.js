@@ -1,25 +1,25 @@
 /**
  * Servidor Express para bot de soporte WhatsApp
- * Versión simplificada sin Kommo
+ * Usando Kapso.ai como intermediario
  */
 
 require('dotenv').config();
 
 const express = require('express');
-const crypto = require('crypto');
 const config = require('./config');
-const { buildAssistantReply, getLLMStatus } = require('./assistant');
+const { buildAssistantReply } = require('./assistant');
 const { getKnowledgeBaseInfo } = require('./knowledge-base');
 const { getProductCatalogInfo } = require('./product-catalog');
 const { startTurn, finishTurn, getSessionStoreInfo } = require('./conversation-state');
 const { getSupportPlaybookInfo } = require('./support-playbook');
+const { sendWhatsAppMessage, getKapsoStatus } = require('./kapso-client');
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const port = config.port;
-const mockSend = config.whatsapp.mockSend;
+const mockSend = !config.whatsapp.accessToken && !process.env.KAPSO_API_KEY;
 
 const runtime = {
   startedAt: new Date().toISOString(),
@@ -38,23 +38,20 @@ const runtime = {
 app.get('/health', async (req, res) => {
   try {
     const kbInfo = getKnowledgeBaseInfo();
-    const llm = getLLMStatus();
     const catalog = getProductCatalogInfo();
     const supportPlaybook = getSupportPlaybookInfo();
     const sessions = await getSessionStoreInfo();
+    const kapso = await getKapsoStatus();
 
     res.status(200).json({
       ok: true,
-      llmEnabled: llm.enabled,
-      llm,
+      kapso,
       knowledgeBase: kbInfo,
       productCatalog: catalog,
       supportPlaybook,
       sessions,
       whatsapp: {
         mockSend,
-        verifyTokenConfigured: Boolean(config.whatsapp.verifyToken),
-        accessTokenConfigured: Boolean(config.whatsapp.accessToken),
         phoneNumberIdConfigured: Boolean(config.whatsapp.phoneNumberId),
       },
       runtime,
@@ -64,51 +61,22 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Webhook verification (GET)
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === config.whatsapp.verifyToken) {
-    console.log('[Webhook] Verificación exitosa');
-    res.status(200).send(challenge);
-  } else {
-    console.error('[Webhook] Verificación fallida');
-    res.sendStatus(403);
-  }
-});
-
-// Webhook receiver (POST)
+// Webhook receiver de Kapso (POST)
 app.post('/webhook', async (req, res) => {
   try {
-    // Verificar firma si está configurada
-    if (config.whatsapp.appSecret) {
-      const signature = req.headers['x-hub-signature-256'];
-      const body = JSON.stringify(req.body);
-      const expected = crypto
-        .createHmac('sha256', config.whatsapp.appSecret)
-        .update(body)
-        .digest('hex');
-      
-      if (signature !== `sha256=${expected}`) {
-        console.error('[Webhook] Firma inválida');
-        return res.sendStatus(403);
-      }
-    }
-
     res.sendStatus(200); // Responder inmediatamente
 
-    // Procesar mensaje
-    const entry = req.body?.entry?.[0];
-    const change = entry?.changes?.[0];
-    const value = change?.value;
+    const body = req.body;
+    
+    // Kapso envía los mensajes en formato específico
+    // Verificar si es un mensaje entrante
+    const message = body.messages?.[0] || body.message;
+    if (!message) return;
 
-    if (!value?.messages?.length) return;
+    const from = message.from || message.sender;
+    const text = message.text?.body || message.text || message.content;
 
-    const message = value.messages[0];
-    const from = message.from;
-    const text = message.text?.body || '';
+    if (!from || !text) return;
 
     runtime.webhookEvents += 1;
     runtime.lastWebhookAt = new Date().toISOString();
@@ -133,7 +101,18 @@ app.post('/webhook', async (req, res) => {
     });
 
     // Enviar respuesta
-    await sendWhatsAppMessage(from, result.text);
+    if (mockSend) {
+      console.log(`[Mock] Respuesta a ${from}: ${result.text.substring(0, 50)}...`);
+      runtime.lastSendAt = new Date().toISOString();
+      runtime.lastSendStatus = 'mock';
+      runtime.lastSendTo = from;
+    } else {
+      await sendWhatsAppMessage(from, result.text);
+      runtime.lastSendAt = new Date().toISOString();
+      runtime.lastSendStatus = 'sent';
+      runtime.lastSendTo = from;
+      runtime.lastSendError = null;
+    }
 
   } catch (error) {
     console.error('[Webhook] Error:', error);
@@ -173,51 +152,14 @@ app.post('/simulate', async (req, res) => {
   }
 });
 
-// Enviar mensaje por WhatsApp API
-async function sendWhatsAppMessage(to, text) {
-  if (mockSend) {
-    console.log(`[Mock] Mensaje a ${to}: ${text.substring(0, 50)}...`);
-    runtime.lastSendAt = new Date().toISOString();
-    runtime.lastSendStatus = 'mock';
-    runtime.lastSendTo = to;
-    return { ok: true, mock: true };
-  }
+// Manejo de errores
+process.on('uncaughtException', (err) => {
+  console.error('[Fatal] Uncaught Exception:', err.message);
+});
 
-  try {
-    const axios = require('axios');
-    const url = `https://graph.facebook.com/v18.0/${config.whatsapp.phoneNumberId}/messages`;
-    
-    await axios.post(
-      url,
-      {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: to,
-        type: 'text',
-        text: { body: text },
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${config.whatsapp.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    runtime.lastSendAt = new Date().toISOString();
-    runtime.lastSendStatus = 'sent';
-    runtime.lastSendTo = to;
-    runtime.lastSendError = null;
-
-    console.log(`[WhatsApp] Mensaje enviado a ${to}`);
-    return { ok: true };
-  } catch (error) {
-    runtime.lastSendStatus = 'error';
-    runtime.lastSendError = error.message;
-    console.error('[WhatsApp] Error enviando:', error.message);
-    throw error;
-  }
-}
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Fatal] Unhandled Rejection:', reason);
+});
 
 // Iniciar servidor
 const server = app.listen(port, () => {
@@ -225,16 +167,8 @@ const server = app.listen(port, () => {
   console.log(`📱 WhatsApp Webhook: http://localhost:${port}/webhook`);
   console.log(`🏥 Health Check: http://localhost:${port}/health`);
   console.log(`🧪 Simulación: http://localhost:${port}/simulate`);
-  console.log(`\n⚙️  Modo: ${mockSend ? 'MOCK (no envía mensajes reales)' : 'PRODUCCIÓN'}`);
-});
-
-// Manejo de errores para mantener el servidor vivo
-process.on('uncaughtException', (err) => {
-  console.error('[Fatal] Uncaught Exception:', err.message);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[Fatal] Unhandled Rejection at:', promise, 'reason:', reason);
+  console.log(`\n⚙️  Modo: ${mockSend ? 'MOCK (no envía mensajes reales)' : 'KAPSO'}`);
+  console.log(`📋 Usando: ${process.env.KAPSO_API_KEY ? 'Kapso.ai' : 'API de Meta directa'}`);
 });
 
 module.exports = { app, runtime };

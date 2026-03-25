@@ -12,6 +12,7 @@
     "model:set": "node scripts/model-manager.js set"
   },
   "dependencies": {
+    "@kapso/whatsapp-cloud-api": "^0.2.0",
     "axios": "^1.9.0",
     "csv-parse": "^5.6.0",
     "dotenv": "^16.5.0",

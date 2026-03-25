@@ -33,10 +33,11 @@ module.exports = {
   
   // WhatsApp Business API
   whatsapp: {
-    verifyToken: getEnv('WHATSAPP_VERIFY_TOKEN', ''),
+    // Usar Kapso.ai (recomendado - tier gratis disponible)
+    kapsoApiKey: getEnv('KAPSO_API_KEY', ''),
+    // O usar API directa de Meta (legacy)
     accessToken: getEnv('WHATSAPP_ACCESS_TOKEN', ''),
     phoneNumberId: getEnv('WHATSAPP_PHONE_NUMBER_ID', ''),
-    appSecret: getEnv('WHATSAPP_APP_SECRET', ''),
     mockSend: getBool('MOCK_WHATSAPP_SEND', false),
   },
   
