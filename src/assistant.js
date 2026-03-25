@@ -783,13 +783,27 @@ function resolveProductForTurn(text, sessionContext) {
       // para que el bot no 'olvide' lo que el usuario ya dijo en el proximo turno.
       stateUpdate.currentProduct = detectedProduct;
 
-      if (!explicitProductSelection) {
+      // Verificar si es un producto con variantes numéricas ambiguas (ej: minifuse, keystep, etc.)
+      const productName = detectedProduct.name || '';
+      const requiresModelClarification = checkRequiresModelClarification(normalizedText, productName);
+      
+      if (!explicitProductSelection || requiresModelClarification) {
+        let askText = "¡Hola! Para poder ayudarte bien, ¿me confirmás el modelo exacto del equipo que tenés?";
+        
+        // Mensaje específico según el producto detectado
+        if (productName.toLowerCase().includes('minifuse')) {
+          askText = "¡Hola! Detecté que mencionaste MiniFuse. ¿Podés confirmarme si es el MiniFuse 1, MiniFuse 2, MiniFuse 4 o el MiniFuse Recording Pack?";
+        } else if (productName.toLowerCase().includes('keystep')) {
+          askText = "¡Hola! Detecté que mencionaste KeyStep. ¿Es el KeyStep, KeyStep 37 o KeyStep Pro?";
+        } else if (productName.toLowerCase().includes('keylab')) {
+          askText = "¡Hola! Detecté KeyLab. ¿Podés confirmar si es el KeyLab Essential, KeyLab 49, KeyLab 61 o KeyLab 88?";
+        }
+        
         return {
           activeProduct: null,
           detectedProduct,
           stateUpdate,
-          askForProductText:
-            "¡Hola! Para poder ayudarte bien, ¿me confirmás el modelo exacto del equipo que tenés? (ej: MiniFuse 2)",
+          askForProductText: askText,
         };
       }
 
@@ -2129,6 +2143,60 @@ function buildProductRootSignature(product) {
     .filter((token) => !/^\d{1,3}$/.test(token));
 
   return canonicalizeSignatureTokens(tokens);
+}
+
+/**
+ * Verifica si se mencionó un producto sin especificar el modelo específico
+ * cuando hay múltiples variantes numéricas disponibles
+ */
+function checkRequiresModelClarification(normalizedText, productName) {
+  if (!productName || !normalizedText) {
+    return false;
+  }
+  
+  const text = normalizedText.toLowerCase();
+  const product = productName.toLowerCase();
+  
+  // Productos que tienen variantes numéricas
+  const productsWithNumericVariants = {
+    'minifuse': {
+      variants: ['1', '2', '4', 'recording pack'],
+      pattern: /\b(minifuse)\b(?!\s*(1|2|4|recording|pack|otg))/
+    },
+    'keystep': {
+      variants: ['37', 'pro'],
+      pattern: /\b(keystep)\b(?!\s*(37|pro|mk2))/
+    },
+    'keylab': {
+      variants: ['essential', '49', '61', '88'],
+      pattern: /\b(keylab)\b(?!\s*(essential|49|61|88|mk3))/
+    },
+    'minilab': {
+      variants: ['3', 'mk2', 'mkii'],
+      pattern: /\b(minilab)\b(?!\s*(3|mk2|mkii))/
+    }
+  };
+  
+  // Buscar si el texto menciona alguno de estos productos sin especificar variante
+  for (const [productKey, config] of Object.entries(productsWithNumericVariants)) {
+    if (product.includes(productKey)) {
+      // Verificar si el texto menciona específicamente una variante
+      const hasSpecificVariant = config.variants.some(variant => 
+        text.includes(productKey + ' ' + variant) || 
+        text.includes(productKey + variant)
+      );
+      
+      // También verificar patrones adicionales
+      const hasAdditionalContext = config.pattern.test(text) === false;
+      
+      if (!hasSpecificVariant && !hasAdditionalContext) {
+        console.log(`[Product Clarification] ${productKey} mencionado sin modelo específico`);
+        return true;
+      }
+    }
+  }
+  
+  return false;
 }
 
 function buildProductVariantKey(product) {
