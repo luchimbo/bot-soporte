@@ -280,16 +280,18 @@ async function buildAssistantReply(userText, options = {}) {
     }
   }
 
-  // Si es problema técnico, buscar FAQs de troubleshooting primero
+  // Si es problema técnico, PRIMERO intentar resolver con FAQs y knowledge base
+  // Solo escalar a humanos si no encuentra solución o el usuario lo pide explícitamente
   if (intentClassification.intent === 'problem_diagnosis' && activeProduct) {
+    // 1. Buscar FAQs de cualquier categoría (no solo configuración)
     const problemFaqHits = searchSupportFaq({
       userText: text,
       activeProduct,
-      preferredCategory: 'faq_configuracion',
-      topK: 2,
+      topK: 3, // Aumentamos a 3 para más chances
     });
 
-    if (problemFaqHits.length > 0 && problemFaqHits[0].confidence > 0.75) {
+    // Si encontramos FAQ con buena confianza, usarla
+    if (problemFaqHits.length > 0 && problemFaqHits[0].confidence > 0.65) {
       return buildFaqPlaybookResponse({
         faqMatch: problemFaqHits[0],
         activeProduct,
@@ -299,21 +301,13 @@ async function buildAssistantReply(userText, options = {}) {
       });
     }
 
-    // Si no hay FAQ específica, ir directo a triage para problemas técnicos
-    const triageMatch = matchSupportTriage({
-      normalizedText,
-      preferredCategory: 'falla_producto',
-    });
-
-    if (triageMatch) {
-      return buildHumanTriageResponse({
-        route: triageMatch.category,
-        activeProduct,
-        stateUpdate: { ...stateUpdate, lastIntent: 'problem_diagnosis' },
-        hasAssistantHistory,
-        detectedProduct: productResolution.detectedProduct,
-      });
-    }
+    // 2. Si no hay FAQ específica, NO vamos directo a triage
+    // Dejamos que el flujo continúe y use knowledge base + LLM
+    // El triage solo se activará si:
+    // - El usuario dice palabras clave de triage (garantía, reclamo, etc.)
+    // - No hay información en knowledge base después de buscar
+    // - El usuario pide explícitamente hablar con alguien
+    console.log('[Problem] No se encontró FAQ específica, continuando con knowledge base...');
   }
 
   // Mensaje de solo producto sin problema específico
