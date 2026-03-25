@@ -1,2 +1,0 @@
-pymupdf==1.27.2.2
-rapidocr-onnxruntime==1.2.3
