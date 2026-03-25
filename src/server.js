@@ -228,4 +228,13 @@ const server = app.listen(port, () => {
   console.log(`\n⚙️  Modo: ${mockSend ? 'MOCK (no envía mensajes reales)' : 'PRODUCCIÓN'}`);
 });
 
+// Manejo de errores para mantener el servidor vivo
+process.on('uncaughtException', (err) => {
+  console.error('[Fatal] Uncaught Exception:', err.message);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Fatal] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 module.exports = { app, runtime };

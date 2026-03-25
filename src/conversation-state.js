@@ -1,18 +1,55 @@
 /**
- * Gestión de estado de conversaciones usando Redis
- * Versión simplificada sin LibSQL/Turso
+ * Gestión de estado de conversaciones
+ * Usa Redis si está disponible, sino memoria local
  */
 
 const config = require('./config');
 const { isSameProduct } = require('./product-catalog');
 
-const sessionTTLHours = config.redis.ttlHours || 72;
+const sessionTTLHours = config.redis?.ttlHours || 72;
 const sessionTTLms = Math.max(sessionTTLHours, 1) * 60 * 60 * 1000;
 const sessionHistoryLimit = Number(process.env.SESSION_HISTORY_LIMIT || 12);
 const sessionStorePrefix = String(process.env.SESSION_STORE_PREFIX || 'soporte:sessions:');
 
-// Cache en memoria para fallback si Redis no está disponible
+// Cache en memoria
 const memorySessions = new Map();
+
+// Redis client (lazy initialization)
+let redisClient = null;
+let redisAvailable = false;
+
+function getRedisClient() {
+  if (redisClient) return redisClient;
+  if (!config.redis?.url) return null;
+  
+  try {
+    const { createClient } = require('redis');
+    redisClient = createClient({ 
+      url: config.redis.url,
+      socket: {
+        connectTimeout: 5000, // 5 segundos timeout
+        reconnectStrategy: false // No reintentar
+      }
+    });
+    
+    redisClient.on('error', () => {
+      redisAvailable = false;
+    });
+    
+    redisClient.on('connect', () => {
+      redisAvailable = true;
+    });
+    
+    // Conectar de forma no bloqueante
+    redisClient.connect().catch(() => {
+      redisAvailable = false;
+    });
+    
+    return redisClient;
+  } catch (error) {
+    return null;
+  }
+}
 
 async function startTurn(sessionId, userText) {
   const session = await getOrCreateSession(sessionId);
@@ -55,17 +92,17 @@ async function finishTurn(sessionId, assistantText, stateUpdate = {}, meta = {})
 async function getSession(sessionId) {
   if (!sessionId) return null;
   
-  try {
-    // Intentar obtener de Redis primero
-    const redis = getRedisClient();
-    if (redis) {
+  // Intentar Redis solo si está disponible
+  if (redisAvailable) {
+    try {
+      const redis = getRedisClient();
       const data = await redis.get(`${sessionStorePrefix}${sessionId}`);
       if (data) {
         return JSON.parse(data);
       }
+    } catch (error) {
+      // Ignorar errores de Redis
     }
-  } catch (error) {
-    console.warn('[Session] Error leyendo de Redis:', error.message);
   }
   
   // Fallback a memoria
@@ -76,7 +113,7 @@ async function getOrCreateSession(sessionId) {
   const existing = await getSession(sessionId);
   if (existing) return existing;
   
-  const newSession = {
+  return {
     id: sessionId,
     messages: [],
     currentProduct: null,
@@ -84,31 +121,27 @@ async function getOrCreateSession(sessionId) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  
-  return newSession;
 }
 
 async function saveSession(session) {
   if (!session?.id) return;
   
-  try {
-    const redis = getRedisClient();
-    if (redis) {
+  // Guardar en Redis si está disponible
+  if (redisAvailable) {
+    try {
+      const redis = getRedisClient();
       await redis.setEx(
         `${sessionStorePrefix}${session.id}`,
         Math.floor(sessionTTLms / 1000),
         JSON.stringify(session)
       );
-      return;
+    } catch (error) {
+      // Ignorar errores
     }
-  } catch (error) {
-    console.warn('[Session] Error guardando en Redis:', error.message);
   }
   
-  // Fallback a memoria
+  // Siempre guardar en memoria como backup
   memorySessions.set(session.id, session);
-  
-  // Limpiar sesiones expiradas en memoria
   cleanupExpiredMemorySessions();
 }
 
@@ -119,7 +152,6 @@ function pushMessage(session, message) {
   
   session.messages.push(message);
   
-  // Mantener solo los últimos N mensajes
   if (session.messages.length > sessionHistoryLimit) {
     session.messages = session.messages.slice(-sessionHistoryLimit);
   }
@@ -167,51 +199,10 @@ function cleanupExpiredMemorySessions() {
   }
 }
 
-let redisClient = null;
-
-function getRedisClient() {
-  if (redisClient) return redisClient;
-  
-  try {
-    const { createClient } = require('redis');
-    redisClient = createClient({ url: config.redis.url });
-    redisClient.on('error', (err) => {
-      console.error('[Redis] Error:', err.message);
-      redisClient = null;
-    });
-    redisClient.connect();
-    return redisClient;
-  } catch (error) {
-    console.warn('[Redis] No disponible, usando memoria:', error.message);
-    return null;
-  }
-}
-
 async function getSessionStoreInfo() {
-  const redis = getRedisClient();
-  
-  if (redis) {
-    try {
-      const keys = await redis.keys(`${sessionStorePrefix}*`);
-      return {
-        backend: 'redis',
-        connected: redis.isReady,
-        sessionCount: keys.length,
-        ttl: sessionTTLHours + ' horas',
-      };
-    } catch (error) {
-      return {
-        backend: 'redis',
-        connected: false,
-        error: error.message,
-        fallback: 'memory',
-      };
-    }
-  }
-  
   return {
-    backend: 'memory',
-    connected: true,
+    backend: redisAvailable ? 'redis' : 'memory',
+    connected: redisAvailable,
     sessionCount: memorySessions.size,
     ttl: sessionTTLHours + ' horas',
   };
