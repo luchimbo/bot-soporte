@@ -1,10 +1,11 @@
 const { detectProductMention, isSameProduct } = require("./product-catalog");
 const { searchSupportFaq, getSupportPolicyText } = require("./support-playbook");
 
-const resolutionYesPattern = /^\s*(si|sí|perfecto|listo|resuelto|solucionado|ya funcion[oó]|ya pude|qued[oó]|anda|funciona)\b/i;
-const resolutionNoPattern = /^\s*(no|nop|nope|n|sigue|sigue igual|no funcion[oó]|no pude|contin[uú]a|todavia no|aun no|persiste)\b/i;
+const resolutionYesPattern = /^\s*(si|sí|perfecto|listo|resuelto|solucionado|ya funcion[oó]|ya pude|qued[oó]|anda|funciona)\s*[!.]*\s*$/i;
+const resolutionNoPattern = /^\s*(no|nop|nope|n|sigue|sigue igual|no funcion[oó]|no pude|contin[uú]a|todavia no|aun no|persiste)\s*[!.]*\s*$/i;
 const invoiceLabelPattern = /\b(?:factura|comprobante|ticket|pedido|orden)\s*(?:nro|numero|num|#|n°|:)?\s*([a-z0-9][a-z0-9\-\/]{3,})\b/i;
 const issueSignalPattern = /\b(no funciona|no anda|falla|falla con|error|problema|inconveniente|no se escucha|no enciende|no conecta|no detecta|no reconoce|no responde|no suena|no sale sonido|se cuelga|se traba|se apaga|no prende|no carga|anda mal|distorsiona)\b/i;
+const concreteIssuePattern = /\b(no funciona|no anda|falla|falla con|error|no se escucha|no enciende|no conecta|no detecta|no reconoce|no responde|no suena|no sale sonido|se cuelga|se traba|se apaga|no prende|no carga|anda mal|distorsiona)\b/i;
 const greetingOnlyPattern = /^\s*(hola|buenas|buen dia|buen día|buenas tardes|buenas noches|consulta|ayuda)\s*[!.]*\s*$/i;
 const sensitiveVariantTokens = new Set([
   "otg",
@@ -376,17 +377,22 @@ function extractProblem({ text, normalizedText, activeProduct, existingProblem, 
 
   candidate = candidate.replace(/\b(?:arturia|midiplus|alctron|alesis|novation|akai|m-audio)\b/gi, " ");
   candidate = candidate.replace(/\s+/g, " ").trim();
+  const normalizedCandidate = normalize(candidate);
 
   if (!candidate) {
     return null;
   }
 
-  if (issueSignalPattern.test(normalizedText)) {
+  if (isVagueProblemStatement(normalizedCandidate)) {
+    return null;
+  }
+
+  if (concreteIssuePattern.test(normalizedText)) {
     return limitText(candidate, 500);
   }
 
   const tokens = candidate.split(/\s+/).filter(Boolean);
-  if (tokens.length >= 5) {
+  if (tokens.length >= 5 && !isGenericOnlyIssue(normalizedCandidate)) {
     return limitText(candidate, 500);
   }
 
@@ -486,6 +492,35 @@ function isGenericProductToken(token) {
     "interface",
     "interfaz",
   ].includes(token);
+}
+
+function isVagueProblemStatement(normalizedCandidate) {
+  if (!normalizedCandidate) {
+    return false;
+  }
+
+  const genericOnly = [
+    /^tengo un problema(?: con)?$/,
+    /^tengo un inconveniente(?: con)?$/,
+    /^tengo un error(?: con)?$/,
+    /^hay un problema(?: con)?$/,
+    /^hay un inconveniente(?: con)?$/,
+    /^problema$/,
+    /^inconveniente$/,
+    /^error$/,
+  ];
+
+  if (genericOnly.some((pattern) => pattern.test(normalizedCandidate))) {
+    return true;
+  }
+
+  return /^(tengo|hay|es|tiene)?\s*(un|una)?\s*(problema|inconveniente|error)\s+con\s+(mi|un|una|el|la)?\s*[a-z0-9\s-]+$/.test(normalizedCandidate)
+    && !concreteIssuePattern.test(normalizedCandidate);
+}
+
+function isGenericOnlyIssue(normalizedCandidate) {
+  return /\b(problema|inconveniente|error)\b/.test(normalizedCandidate)
+    && !concreteIssuePattern.test(normalizedCandidate);
 }
 
 function normalize(text) {
