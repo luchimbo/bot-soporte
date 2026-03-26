@@ -47,6 +47,45 @@ const runtime = {
   lastSendError: null,
 };
 
+async function processAssistantTurn(sessionId, userText) {
+  const sessionContext = await startTurn(sessionId, userText);
+  const result = await buildAssistantReply(userText, {
+    sessionContext,
+    sessionId,
+  });
+
+  const updatedSession = await finishTurn(
+    sessionId,
+    result.text,
+    result.stateUpdate,
+    {
+      mode: result.mode,
+      hits: result.hits?.length || 0,
+    }
+  );
+
+  return {
+    result,
+    updatedSession,
+  };
+}
+
+async function buildKommoBotPayload(sessionId, userText) {
+  const { result, updatedSession } = await processAssistantTurn(sessionId, userText);
+
+  return {
+    ok: true,
+    reply: result.text,
+    mode: result.mode,
+    sessionId,
+    activeProduct: result.activeProduct || updatedSession.currentProduct || null,
+    reportedProblem: updatedSession.reportedProblem || null,
+    invoiceNumber: updatedSession.invoiceNumber || null,
+    supportFlow: updatedSession.supportFlow || null,
+    humanActive: Boolean(updatedSession.humanActive),
+  };
+}
+
 function isKapsoPlaceholder(value) {
   return /^\s*\{\{[^}]+\}\}\s*$/.test(String(value || ''));
 }
@@ -65,6 +104,98 @@ function isInboundMessageEvent(eventType, body) {
     || normalized === 'message.received'
     || normalized === 'message_received'
     || normalized === 'received';
+}
+
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
+function extractKommoSessionId(body = {}) {
+  return String(
+    firstNonEmpty(
+      body.sessionId,
+      body.contactPhone,
+      body.phone,
+      body.from,
+      body.contact?.phone,
+      body.contact?.id && `contact:${body.contact.id}`,
+      body.lead?.id && `lead:${body.lead.id}`,
+      body.chat_id && `chat:${body.chat_id}`
+    ) || 'kommo-default'
+  );
+}
+
+function extractKommoUserText(body = {}) {
+  return firstNonEmpty(
+    body.text,
+    body.message,
+    body.userText,
+    body.content,
+    body.messageText,
+    body.lastMessage,
+    body.message?.text,
+    body.message?.body,
+    body.payload?.text,
+    body.data?.text
+  );
+}
+
+function extractKommoWidgetPayload(body = {}) {
+  const data = body?.data || {};
+  const userText = firstNonEmpty(
+    data.message,
+    data.text,
+    data.userText,
+    data.messageText,
+    body.message,
+    body.text
+  );
+
+  const sessionId = String(
+    firstNonEmpty(
+      data.sessionId,
+      data.contactPhone,
+      data.phone,
+      data.from,
+      data.leadId && `lead:${data.leadId}`,
+      data.contactId && `contact:${data.contactId}`,
+      body.sessionId,
+      body.contactPhone
+    ) || 'kommo-widget-default'
+  );
+
+  return {
+    userText,
+    sessionId,
+    returnUrl: String(body.return_url || '').trim(),
+  };
+}
+
+function buildKommoContinuePayload(botResponse) {
+  return {
+    data: {
+      reply: botResponse.reply,
+      mode: botResponse.mode,
+      sessionId: botResponse.sessionId,
+      reportedProblem: botResponse.reportedProblem,
+      invoiceNumber: botResponse.invoiceNumber,
+      humanActive: botResponse.humanActive,
+    },
+    execute_handlers: [
+      {
+        handler: 'show',
+        params: {
+          type: 'text',
+          value: '{{json.reply}}',
+        },
+      },
+    ],
+  };
 }
 
 // Health check
@@ -144,17 +275,7 @@ app.post('/webhook', async (req, res) => {
 
     // Generar respuesta
     const sessionId = from;
-    const sessionContext = await startTurn(sessionId, text);
-
-    const result = await buildAssistantReply(text, {
-      sessionContext,
-      sessionId,
-    });
-
-    await finishTurn(sessionId, result.text, result.stateUpdate, {
-      mode: result.mode,
-      hits: result.hits?.length || 0,
-    });
+    const { result } = await processAssistantTurn(sessionId, text);
 
     // Enviar respuesta por WhatsApp directamente
     if (mockSend) {
@@ -203,32 +324,75 @@ app.post('/simulate', async (req, res) => {
     const userText = req.body?.text || '';
     const sessionId = String(req.body?.sessionId || 'simulate-default');
 
-    const sessionContext = await startTurn(sessionId, userText);
-    const result = await buildAssistantReply(userText, {
-      sessionContext,
-      sessionId,
-    });
-    
-    const updatedSession = await finishTurn(
-      sessionId,
-      result.text,
-      result.stateUpdate,
-      { mode: result.mode }
-    );
+    const payload = await buildKommoBotPayload(sessionId, userText);
 
-    res.status(200).json({
-      reply: result.text,
-      mode: result.mode,
-      sessionId,
-      activeProduct: result.activeProduct || updatedSession.currentProduct || null,
-      reportedProblem: updatedSession.reportedProblem || null,
-      invoiceNumber: updatedSession.invoiceNumber || null,
-      supportFlow: updatedSession.supportFlow || null,
-      humanActive: Boolean(updatedSession.humanActive),
-    });
+    res.status(200).json(payload);
   } catch (error) {
     console.error('[Simulate] Error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/kommo/support', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const userText = extractKommoUserText(body);
+    const sessionId = extractKommoSessionId(body);
+
+    if (!userText) {
+      return res.status(400).json({
+        ok: false,
+        error: 'No se encontro texto del usuario en el payload de Kommo',
+      });
+    }
+
+    const payload = await buildKommoBotPayload(sessionId, userText);
+
+    return res.status(200).json(payload);
+  } catch (error) {
+    console.error('[Kommo] Error procesando mensaje:', error);
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
+
+app.post('/kommo/widget-request', async (req, res) => {
+  try {
+    const { userText, sessionId, returnUrl } = extractKommoWidgetPayload(req.body || {});
+
+    if (!userText) {
+      return res.status(400).json({
+        ok: false,
+        error: 'No se encontro message/text en data para el widget de Kommo',
+      });
+    }
+
+    const payload = await buildKommoBotPayload(sessionId, userText);
+
+    if (returnUrl) {
+      await require('axios').post(returnUrl, buildKommoContinuePayload(payload), {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        timeout: 12000,
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      delivered: Boolean(returnUrl),
+      reply: payload.reply,
+      mode: payload.mode,
+      sessionId: payload.sessionId,
+    });
+  } catch (error) {
+    console.error('[Kommo widget] Error procesando mensaje:', error.response?.data || error.message || error);
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+    });
   }
 });
 

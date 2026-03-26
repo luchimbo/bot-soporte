@@ -1,0 +1,74 @@
+{
+  "widget": {
+    "name": "Kommo Support Bridge",
+    "description": "Conecta Salesbot de Kommo con el bot de soporte en Railway.",
+    "short_description": "Kommo -> Railway support bot",
+    "version": "1.0.0",
+    "interface_version": 2,
+    "init_once": false,
+    "locale": [
+      "es",
+      "en"
+    ],
+    "installation": true,
+    "support": {
+      "link": "https://www.pcmidi.com.ar",
+      "email": "soporte@pcmidicenter.com"
+    }
+  },
+  "locations": [
+    "salesbot_designer"
+  ],
+  "settings": {
+    "default_backend_url": {
+      "name": "settings.default_backend_url",
+      "type": "text",
+      "required": false,
+      "default_value": ""
+    }
+  },
+  "salesbot_designer": {
+    "support_request": {
+      "name": "salesbot.support_request",
+      "logo": "/images/logo_main.png",
+      "settings": {
+        "endpoint_url": {
+          "name": "salesbot.endpoint_url",
+          "default_value": "",
+          "type": "text",
+          "manual": true
+        },
+        "session_id": {
+          "name": "salesbot.session_id",
+          "default_value": "{{contact.cf.395702}}",
+          "type": "text",
+          "manual": true
+        },
+        "message_text": {
+          "name": "salesbot.message_text",
+          "default_value": "{{message_text}}",
+          "type": "text",
+          "manual": true
+        },
+        "contact_phone": {
+          "name": "salesbot.contact_phone",
+          "default_value": "{{contact.cf.395702}}",
+          "type": "text",
+          "manual": true
+        },
+        "lead_id": {
+          "name": "salesbot.lead_id",
+          "default_value": "{{lead.id}}",
+          "type": "text",
+          "manual": true
+        },
+        "contact_id": {
+          "name": "salesbot.contact_id",
+          "default_value": "{{contact.id}}",
+          "type": "text",
+          "manual": true
+        }
+      }
+    }
+  }
+}

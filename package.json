@@ -9,7 +9,8 @@
     "build:kb": "node scripts/build-knowledge-base.js",
     "update:playbook": "node scripts/update-playbook.js",
     "model:show": "node scripts/model-manager.js show",
-    "model:set": "node scripts/model-manager.js set"
+    "model:set": "node scripts/model-manager.js set",
+    "kommo:package": "python scripts/build-kommo-widget.py"
   },
   "dependencies": {
     "@kapso/whatsapp-cloud-api": "^0.2.0",

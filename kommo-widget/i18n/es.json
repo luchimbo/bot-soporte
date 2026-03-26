@@ -1,0 +1,16 @@
+{
+  "settings": {
+    "default_backend_url": "URL por defecto del backend"
+  },
+  "salesbot": {
+    "support_request": "Enviar a backend de soporte",
+    "endpoint_url": "URL del endpoint de Railway",
+    "session_id": "Identificador de sesion",
+    "message_text": "Texto del mensaje del cliente",
+    "contact_phone": "Telefono del contacto",
+    "lead_id": "ID del lead",
+    "contact_id": "ID del contacto",
+    "endpoint_required": "Necesitas definir la URL del endpoint de Railway.",
+    "endpoint_placeholder": "Configura la URL del backend de soporte"
+  }
+}
