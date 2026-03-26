@@ -51,6 +51,22 @@ function isKapsoPlaceholder(value) {
   return /^\s*\{\{[^}]+\}\}\s*$/.test(String(value || ''));
 }
 
+function getKapsoEventType(body) {
+  return body?.event || body?.type || body?.topic || body?.trigger || body?.data?.event || null;
+}
+
+function isInboundMessageEvent(eventType, body) {
+  const normalized = String(eventType || '').toLowerCase();
+  if (!normalized) {
+    return Boolean(body?.messages?.length || body?.message);
+  }
+
+  return normalized === 'whatsapp.message.received'
+    || normalized === 'message.received'
+    || normalized === 'message_received'
+    || normalized === 'received';
+}
+
 // Health check
 app.get('/health', async (req, res) => {
   try {
@@ -86,6 +102,13 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(200);
 
     const body = req.body;
+    const eventType = getKapsoEventType(body);
+
+    if (!isInboundMessageEvent(eventType, body)) {
+      console.log(`[Webhook] Ignorando evento no entrante: ${eventType || 'unknown'}`);
+      runtime.lastWebhookStatus = 'ignored_non_inbound';
+      return;
+    }
     
     // Kapso envía los mensajes en formato específico
     const message = body.messages?.[0] || body.message;
