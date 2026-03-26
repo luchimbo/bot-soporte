@@ -183,7 +183,10 @@ function toSnapshot(session) {
   return {
     messages: session.messages || [],
     currentProduct: session.currentProduct || null,
+    reportedProblem: session.reportedProblem || null,
+    invoiceNumber: session.invoiceNumber || null,
     supportFlow: session.supportFlow || null,
+    humanActive: Boolean(session.humanActive),
     pendingProductSwitch: session.pendingProductSwitch || null,
     lastMode: session.lastMode || null,
   };

@@ -109,14 +109,14 @@ async function findConversationByPhone(phoneNumber, phoneNumberId = PHONE_NUMBER
  * Mark conversation for human attention
  * Updates conversation with note/tag indicating escalation
  */
-async function markForHumanAttention(phoneNumber, reason, metadata = {}, phoneNumberId = PHONE_NUMBER_ID) {
+async function markForHumanAttention(phoneNumber, reason, metadata = {}, phoneNumberId = PHONE_NUMBER_ID, customMessage = null) {
   try {
     // 1. Enviar mensaje al cliente
-    const handoffMessage = `⏸️ *Derivación a agente humano*\n\n` +
+    const handoffMessage = customMessage || (`⏸️ *Derivación a agente humano*\n\n` +
       `Voy a derivarte con uno de nuestros especialistas en soporte técnico para que te ayude personalmente.\n\n` +
       `📝 *Motivo:* ${reason}\n\n` +
       `Por favor, aguardá unos minutos mientras te asignamos al mejor agente disponible. Te responderán a la brevedad.\n\n` +
-      `_Horario de atención: Lunes a Viernes de 9:00 a 14:00 hs_`;
+      `_Horario de atención: Lunes a Viernes de 9:00 a 14:00 hs_`);
     
     await sendWhatsAppMessage(phoneNumber, handoffMessage, phoneNumberId);
     

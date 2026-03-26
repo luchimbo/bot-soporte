@@ -13,8 +13,6 @@ const { getKnowledgeBaseInfo } = require('./knowledge-base');
 const { getProductCatalogInfo } = require('./product-catalog');
 const { 
   lookupProductByModel, 
-  detectDrumModel, 
-  getConnectivityResponse,
   getAllDrumKits 
 } = require('./product-kb-integration');
 const { startTurn, finishTurn, getSessionStoreInfo } = require('./conversation-state');
@@ -108,31 +106,12 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`[Webhook] Mensaje de ${from}: ${text.substring(0, 50)}...`);
 
-    // Detectar si el mensaje menciona un modelo de batería específico
-    const detectedDrumModel = detectDrumModel(text);
-    let kbProductInfo = null;
-    
-    if (detectedDrumModel) {
-      console.log(`[KB] Modelo detectado: ${detectedDrumModel}`);
-      kbProductInfo = lookupProductByModel(detectedDrumModel);
-      if (kbProductInfo) {
-        console.log(`[KB] Info encontrada para ${detectedDrumModel}`);
-      }
-    }
-
     // Generar respuesta
     const sessionId = from;
     const sessionContext = await startTurn(sessionId, text);
-    
-    // Si detectamos un modelo y tenemos info en KB, la agregamos al contexto
-    const enhancedContext = {
-      ...sessionContext,
-      kbProductInfo: kbProductInfo,
-      detectedDrumModel: detectedDrumModel
-    };
-    
+
     const result = await buildAssistantReply(text, {
-      sessionContext: enhancedContext,
+      sessionContext,
       sessionId,
     });
 
@@ -149,7 +128,20 @@ app.post('/webhook', async (req, res) => {
       runtime.lastSendTo = from;
     } else {
       try {
-        await sendWhatsAppMessage(from, result.text);
+        if (result.mode === 'human-triage') {
+          await markForHumanAttention(
+            from,
+            result.handoffReason || 'Escalacion automatica desde bot',
+            {
+              source: 'bot_flow',
+              ...result.handoffMetadata,
+            },
+            undefined,
+            result.text
+          );
+        } else {
+          await sendWhatsAppMessage(from, result.text);
+        }
         runtime.lastSendAt = new Date().toISOString();
         runtime.lastSendStatus = 'sent';
         runtime.lastSendTo = from;
@@ -193,6 +185,10 @@ app.post('/simulate', async (req, res) => {
       mode: result.mode,
       sessionId,
       activeProduct: result.activeProduct || updatedSession.currentProduct || null,
+      reportedProblem: updatedSession.reportedProblem || null,
+      invoiceNumber: updatedSession.invoiceNumber || null,
+      supportFlow: updatedSession.supportFlow || null,
+      humanActive: Boolean(updatedSession.humanActive),
     });
   } catch (error) {
     console.error('[Simulate] Error:', error);
