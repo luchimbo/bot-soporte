@@ -52,19 +52,48 @@ function detectDrumModel(text) {
   if (!text) return null;
   
   const upper = text.toUpperCase();
-  const models = [
-    'MD200ULTRA', 'MD200L', 'MD10L', 'MD10D', 'MD200', 'MD10',
-    'ED9', 'ED9PRO', 'ED8', 'ED6', 'ED9 PRO',
-    'MP200', 'DD315', 'XD8', 'XD8USB'
+  
+  // Eliminar espacios para detectar "MD200 Ultra" como "MD200ULTRA"
+  const upperNoSpaces = upper.replace(/\s+/g, '');
+  
+  // Primero buscar con espacios eliminados (para MD200 Ultra, ED9 Pro, etc.)
+  const modelsNoSpaces = [
+    { pattern: 'MD200ULTRA', key: 'MD200ULTRA' },
+    { pattern: 'MD200L', key: 'MD200L' },
+    { pattern: 'MD10L', key: 'MD10L' },
+    { pattern: 'MD10D', key: 'MD10D' },
+    { pattern: 'ED9PRO', key: 'ED9' },
+    { pattern: 'ED9', key: 'ED9' },
+    { pattern: 'ED8', key: 'ED8' },
+    { pattern: 'ED6', key: 'ED6' },
+    { pattern: 'MP200', key: null }, // No tiene modelo específico
+    { pattern: 'DD315', key: null },
+    { pattern: 'XD8USB', key: null },
+    { pattern: 'XD8', key: null }
   ];
   
-  for (const model of models) {
-    if (upper.includes(model)) {
-      // Normalizar nombres
-      if (model === 'ED9PRO' || model === 'ED9 PRO') return 'ED9';
-      if (model === 'MD200') return 'MD200ULTRA';
-      if (model === 'MD10') return 'MD10L';
-      return model;
+  for (const { pattern, key } of modelsNoSpaces) {
+    if (upperNoSpaces.includes(pattern)) {
+      return key || pattern;
+    }
+  }
+  
+  // Si no encontró, buscar con expresiones regulares más flexibles
+  // Esto captura "MD 200", "MD-200", etc.
+  const flexiblePatterns = [
+    { regex: /\bMD[\s-]?200[\s-]?ULTRA\b/i, key: 'MD200ULTRA' },
+    { regex: /\bMD[\s-]?200[\s-]?L\b/i, key: 'MD200L' },
+    { regex: /\bMD[\s-]?10[\s-]?L\b/i, key: 'MD10L' },
+    { regex: /\bMD[\s-]?10[\s-]?D\b/i, key: 'MD10D' },
+    { regex: /\bED[\s-]?9[\s-]?PRO\b/i, key: 'ED9' },
+    { regex: /\bED[\s-]?9\b/i, key: 'ED9' },
+    { regex: /\bED[\s-]?8\b/i, key: 'ED8' },
+    { regex: /\bED[\s-]?6\b/i, key: 'ED6' }
+  ];
+  
+  for (const { regex, key } of flexiblePatterns) {
+    if (regex.test(text)) {
+      return key;
     }
   }
   
