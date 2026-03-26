@@ -71,22 +71,25 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Webhook receiver de Kapso (POST)
+// Webhook receiver de Kapso (POST) - Modo Flujo Explícito
+// Devuelve la respuesta en el body para que Kapso la muestre en el flujo
 app.post('/webhook', async (req, res) => {
   try {
-    res.sendStatus(200); // Responder inmediatamente
-
     const body = req.body;
     
     // Kapso envía los mensajes en formato específico
     // Verificar si es un mensaje entrante
     const message = body.messages?.[0] || body.message;
-    if (!message) return;
+    if (!message) {
+      return res.status(400).json({ error: 'No message found' });
+    }
 
     const from = message.from || message.sender;
     const text = message.text?.body || message.text || message.content;
 
-    if (!from || !text) return;
+    if (!from || !text) {
+      return res.status(400).json({ error: 'Missing from or text' });
+    }
 
     runtime.webhookEvents += 1;
     runtime.lastWebhookAt = new Date().toISOString();
@@ -129,24 +132,34 @@ app.post('/webhook', async (req, res) => {
       hits: result.hits?.length || 0,
     });
 
-    // Enviar respuesta
-    if (mockSend) {
-      console.log(`[Mock] Respuesta a ${from}: ${result.text.substring(0, 50)}...`);
-      runtime.lastSendAt = new Date().toISOString();
-      runtime.lastSendStatus = 'mock';
-      runtime.lastSendTo = from;
-    } else {
-      await sendWhatsAppMessage(from, result.text);
-      runtime.lastSendAt = new Date().toISOString();
-      runtime.lastSendStatus = 'sent';
-      runtime.lastSendTo = from;
-      runtime.lastSendError = null;
-    }
+    // Log de la respuesta
+    console.log(`[Webhook] Respuesta generada: ${result.text.substring(0, 50)}...`);
+    runtime.lastSendAt = new Date().toISOString();
+    runtime.lastSendStatus = 'flow-response';
+    runtime.lastSendTo = from;
+
+    // Devolver la respuesta en el body para el flujo de Kapso
+    res.status(200).json({
+      reply: result.text,
+      mode: result.mode,
+      activeProduct: result.activeProduct || null,
+      detectedProduct: result.detectedProduct || null,
+      kbProductInfo: kbProductInfo,
+      detectedDrumModel: detectedDrumModel,
+      sessionId: sessionId
+    });
 
   } catch (error) {
     console.error('[Webhook] Error:', error);
     runtime.lastWebhookStatus = 'error';
     runtime.lastSendError = error.message;
+    
+    // Devolver error en formato JSON para que el flujo lo maneje
+    res.status(500).json({
+      reply: 'Lo siento, hubo un error procesando tu mensaje. Por favor, intentá de nuevo en unos momentos.',
+      mode: 'error',
+      error: error.message
+    });
   }
 });
 
