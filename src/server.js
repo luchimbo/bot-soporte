@@ -1,6 +1,7 @@
 /**
  * Servidor Express para bot de soporte WhatsApp
- * Usando Kapso.ai como intermediario
+ * Usando Kapso.ai como intermediario - Modo Webhook Tradicional
+ * El servidor envía respuestas directamente por WhatsApp
  */
 
 require('dotenv').config();
@@ -71,46 +72,28 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Webhook receiver de Kapso (POST) - Modo Flujo Explícito
-// Devuelve la respuesta en el body para que Kapso la muestre en el flujo
+// Webhook receiver de Kapso (POST) - Modo Tradicional
+// Responde inmediatamente y envía la respuesta por WhatsApp directamente
 app.post('/webhook', async (req, res) => {
   try {
+    // Responder inmediatamente a Kapso
+    res.sendStatus(200);
+
     const body = req.body;
     
-    // LOG para diagnóstico
-    console.log('[Webhook] Body recibido:', JSON.stringify(body, null, 2));
-    
-    // Intentar extraer el mensaje de diferentes formatos posibles
-    let from = null;
-    let text = null;
-    
-    // Formato 1: body.message.from (formato que enviamos desde Kapso)
-    if (body.message?.from) {
-      from = body.message.from;
-      text = body.message.text?.body || body.message.text;
-    }
-    // Formato 2: body.messages[0] (formato de webhook tradicional)
-    else if (body.messages?.[0]) {
-      from = body.messages[0].from;
-      text = body.messages[0].text?.body;
-    }
-    // Formato 3: body.from y body.text directo (por si acaso)
-    else if (body.from && (body.text || body.content)) {
-      from = body.from;
-      text = body.text || body.content;
-    }
-    // Formato 4: body.user_response (variable de Kapso)
-    else if (body.user_response) {
-      from = body.phone_number_id || 'unknown';
-      text = body.user_response;
+    // Kapso envía los mensajes en formato específico
+    const message = body.messages?.[0] || body.message;
+    if (!message) {
+      console.log('[Webhook] No se encontró mensaje en el body');
+      return;
     }
 
+    const from = message.from || message.sender;
+    const text = message.text?.body || message.text || message.content;
+
     if (!from || !text) {
-      console.error('[Webhook] No se pudo extraer from o text del body:', body);
-      return res.status(400).json({ 
-        error: 'Missing from or text',
-        received: body 
-      });
+      console.log('[Webhook] Falta from o text');
+      return;
     }
 
     runtime.webhookEvents += 1;
@@ -154,34 +137,31 @@ app.post('/webhook', async (req, res) => {
       hits: result.hits?.length || 0,
     });
 
-    // Log de la respuesta
-    console.log(`[Webhook] Respuesta generada: ${result.text.substring(0, 50)}...`);
-    runtime.lastSendAt = new Date().toISOString();
-    runtime.lastSendStatus = 'flow-response';
-    runtime.lastSendTo = from;
-
-    // Devolver la respuesta en el body para el flujo de Kapso
-    res.status(200).json({
-      reply: result.text,
-      mode: result.mode,
-      activeProduct: result.activeProduct || null,
-      detectedProduct: result.detectedProduct || null,
-      kbProductInfo: kbProductInfo,
-      detectedDrumModel: detectedDrumModel,
-      sessionId: sessionId
-    });
+    // Enviar respuesta por WhatsApp directamente
+    if (mockSend) {
+      console.log(`[Mock] Respuesta a ${from}: ${result.text.substring(0, 50)}...`);
+      runtime.lastSendAt = new Date().toISOString();
+      runtime.lastSendStatus = 'mock';
+      runtime.lastSendTo = from;
+    } else {
+      try {
+        await sendWhatsAppMessage(from, result.text);
+        runtime.lastSendAt = new Date().toISOString();
+        runtime.lastSendStatus = 'sent';
+        runtime.lastSendTo = from;
+        runtime.lastSendError = null;
+        console.log(`[Webhook] Mensaje enviado a ${from}`);
+      } catch (sendError) {
+        console.error('[Webhook] Error enviando mensaje:', sendError);
+        runtime.lastSendStatus = 'error';
+        runtime.lastSendError = sendError.message;
+      }
+    }
 
   } catch (error) {
     console.error('[Webhook] Error:', error);
     runtime.lastWebhookStatus = 'error';
     runtime.lastSendError = error.message;
-    
-    // Devolver error en formato JSON para que el flujo lo maneje
-    res.status(500).json({
-      reply: 'Lo siento, hubo un error procesando tu mensaje. Por favor, intentá de nuevo en unos momentos.',
-      mode: 'error',
-      error: error.message
-    });
   }
 });
 
@@ -304,8 +284,8 @@ const server = app.listen(port, () => {
   console.log(`📦 API Productos: http://localhost:${port}/api/product/:modelo`);
   console.log(`🥁 API Baterías: http://localhost:${port}/api/baterias`);
   console.log(`🔍 API Búsqueda: http://localhost:${port}/api/search?q=termino`);
-  console.log(`\n⚙️  Modo: ${mockSend ? 'MOCK (no envía mensajes reales)' : 'KAPSO'}`);
-  console.log(`📋 Usando: ${process.env.KAPSO_API_KEY ? 'Kapso.ai' : 'API de Meta directa'}`);
+  console.log(`\n⚙️  Modo: ${mockSend ? 'MOCK (no envía mensajes reales)' : 'PRODUCCIÓN'}`);
+  console.log(`📋 Usando: Webhook Tradicional (servidor envía mensajes directamente)`);
   console.log(`\n📚 Knowledge Base: 590 productos, 69 manuales, 278 FAQs`);
 });
 
