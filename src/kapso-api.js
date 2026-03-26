@@ -6,16 +6,18 @@
 const axios = require('axios');
 
 const KAPSO_API_KEY = process.env.KAPSO_API_KEY;
-const KAPSO_BASE_URL = process.env.KAPSO_API_BASE_URL || 'https://api.kapso.ai/platform/v1';
+// Para mensajes usar el Meta proxy endpoint
+const KAPSO_BASE_URL = process.env.KAPSO_API_BASE_URL || 'https://api.kapso.ai';
 const PHONE_NUMBER_ID = process.env.KAPSO_PHONE_NUMBER_ID || '1062277090297627';
 
 /**
- * Send WhatsApp message via Kapso API
+ * Send WhatsApp message via Kapso API (Meta proxy)
  */
 async function sendWhatsAppMessage(to, text, phoneNumberId = PHONE_NUMBER_ID) {
   try {
+    // Usar el endpoint correcto de Kapso para mensajes
     const response = await axios.post(
-      `${KAPSO_BASE_URL}/phone_numbers/${phoneNumberId}/messages`,
+      `${KAPSO_BASE_URL}/meta/whatsapp/v24.0/${phoneNumberId}/messages`,
       {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
@@ -27,7 +29,7 @@ async function sendWhatsAppMessage(to, text, phoneNumberId = PHONE_NUMBER_ID) {
       },
       {
         headers: {
-          'X-API-Key': KAPSO_API_KEY,
+          'Authorization': `Bearer ${KAPSO_API_KEY}`,
           'Content-Type': 'application/json'
         }
       }
@@ -47,7 +49,7 @@ async function sendWhatsAppMessage(to, text, phoneNumberId = PHONE_NUMBER_ID) {
 async function getConversation(conversationId, phoneNumberId = PHONE_NUMBER_ID) {
   try {
     const response = await axios.get(
-      `${KAPSO_BASE_URL}/phone_numbers/${phoneNumberId}/conversations/${conversationId}`,
+      `${KAPSO_BASE_URL}/platform/v1/phone_numbers/${phoneNumberId}/conversations/${conversationId}`,
       {
         headers: {
           'X-API-Key': KAPSO_API_KEY
@@ -68,7 +70,7 @@ async function getConversation(conversationId, phoneNumberId = PHONE_NUMBER_ID) 
 async function listConversations(limit = 50, phoneNumberId = PHONE_NUMBER_ID) {
   try {
     const response = await axios.get(
-      `${KAPSO_BASE_URL}/phone_numbers/${phoneNumberId}/conversations?limit=${limit}`,
+      `${KAPSO_BASE_URL}/platform/v1/phone_numbers/${phoneNumberId}/conversations?limit=${limit}`,
       {
         headers: {
           'X-API-Key': KAPSO_API_KEY
@@ -128,7 +130,7 @@ async function markForHumanAttention(phoneNumber, reason, metadata = {}, phoneNu
       // Nota: La API específica de update puede variar, esto es un ejemplo
       try {
         await axios.patch(
-          `${KAPSO_BASE_URL}/phone_numbers/${phoneNumberId}/conversations/${conversation.id}`,
+          `${KAPSO_BASE_URL}/platform/v1/phone_numbers/${phoneNumberId}/conversations/${conversation.id}`,
           {
             metadata: {
               ...conversation.metadata,
@@ -187,8 +189,9 @@ async function sendHumanAgentMessage(to, agentName, message, phoneNumberId = PHO
  */
 async function getKapsoStatus() {
   try {
+    // Para status usar el platform API
     const response = await axios.get(
-      `${KAPSO_BASE_URL}/phone_numbers/${PHONE_NUMBER_ID}`,
+      `${KAPSO_BASE_URL}/platform/v1/phone_numbers/${PHONE_NUMBER_ID}`,
       {
         headers: {
           'X-API-Key': KAPSO_API_KEY
