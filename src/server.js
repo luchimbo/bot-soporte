@@ -47,6 +47,10 @@ const runtime = {
   lastSendError: null,
 };
 
+function isKapsoPlaceholder(value) {
+  return /^\s*\{\{[^}]+\}\}\s*$/.test(String(value || ''));
+}
+
 // Health check
 app.get('/health', async (req, res) => {
   try {
@@ -95,6 +99,15 @@ app.post('/webhook', async (req, res) => {
 
     if (!from || !text) {
       console.log('[Webhook] Falta from o text');
+      return;
+    }
+
+    if (isKapsoPlaceholder(from) || isKapsoPlaceholder(text)) {
+      console.log('[Webhook] Llegaron placeholders literales desde Kapso. Revisar el mapeo del workflow/webhook payload.');
+      console.log('[Webhook] from=', from, 'text=', text);
+      runtime.lastWebhookStatus = 'placeholder_payload';
+      runtime.lastInboundFrom = String(from);
+      runtime.lastInboundPreview = String(text).slice(0, 50);
       return;
     }
 

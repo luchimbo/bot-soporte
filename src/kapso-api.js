@@ -29,7 +29,7 @@ async function sendWhatsAppMessage(to, text, phoneNumberId = PHONE_NUMBER_ID) {
       },
       {
         headers: {
-          'Authorization': `Bearer ${KAPSO_API_KEY}`,
+          'X-API-Key': KAPSO_API_KEY,
           'Content-Type': 'application/json'
         }
       }
