@@ -19,7 +19,11 @@ const {
 } = require('./product-kb-integration');
 const { startTurn, finishTurn, getSessionStoreInfo } = require('./conversation-state');
 const { getSupportPlaybookInfo } = require('./support-playbook');
-const { sendWhatsAppMessage, getKapsoStatus } = require('./kapso-client');
+const { 
+  sendWhatsAppMessage, 
+  getKapsoStatus, 
+  markForHumanAttention 
+} = require('./kapso-api');
 const kbApiRouter = require('./routes/kb-api');
 
 const app = express();
@@ -193,6 +197,38 @@ app.post('/simulate', async (req, res) => {
   } catch (error) {
     console.error('[Simulate] Error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// API: Escalar a humano manualmente
+app.post('/api/escalate', async (req, res) => {
+  try {
+    const { phoneNumber, reason } = req.body;
+    
+    if (!phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        error: 'phoneNumber es requerido'
+      });
+    }
+    
+    const result = await markForHumanAttention(
+      phoneNumber, 
+      reason || 'Escalación manual desde API',
+      { source: 'api_manual' }
+    );
+    
+    res.json({
+      success: true,
+      message: 'Conversación escalada a agente humano',
+      data: result
+    });
+  } catch (error) {
+    console.error('[API] Error escalando:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
