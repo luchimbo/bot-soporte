@@ -10,11 +10,24 @@ const KAPSO_API_KEY = process.env.KAPSO_API_KEY;
 const KAPSO_BASE_URL = process.env.KAPSO_API_BASE_URL || 'https://api.kapso.ai';
 const PHONE_NUMBER_ID = process.env.KAPSO_PHONE_NUMBER_ID || '1062277090297627';
 
+function isTemplatePlaceholder(value) {
+  const text = String(value || '').trim();
+  return /^\{\{[^}]+\}\}$/.test(text);
+}
+
 /**
  * Send WhatsApp message via Kapso API (Meta proxy)
  */
 async function sendWhatsAppMessage(to, text, phoneNumberId = PHONE_NUMBER_ID) {
   try {
+    if (isTemplatePlaceholder(to) || isTemplatePlaceholder(text)) {
+      console.log('[Kapso] Se omitio un envio con placeholders literales.', { to, text });
+      return {
+        skipped: true,
+        reason: 'template_placeholder',
+      };
+    }
+
     // Usar el endpoint correcto de Kapso para mensajes
     const response = await axios.post(
       `${KAPSO_BASE_URL}/meta/whatsapp/v24.0/${phoneNumberId}/messages`,
