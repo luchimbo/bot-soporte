@@ -698,6 +698,28 @@ function resolveProductForTurn(text, sessionContext) {
   const currentProduct = sessionContext?.currentProduct || null;
   const pendingProductSwitch = sessionContext?.pendingProductSwitch || null;
 
+  // NUEVO: Si ya detectamos un modelo desde la Knowledge Base, usarlo directamente
+  const kbProductInfo = sessionContext?.kbProductInfo || null;
+  const detectedDrumModel = sessionContext?.detectedDrumModel || null;
+  
+  // Si hay info de KB y no hay producto actual, usar el de la KB
+  if (kbProductInfo && !currentProduct && detectedDrumModel) {
+    const kbProduct = {
+      name: kbProductInfo.nombre,
+      normalizedName: normalize(kbProductInfo.nombre),
+      sku: kbProductInfo.sku,
+      brand: kbProductInfo.marca,
+      category: kbProductInfo.tipo,
+      source: "knowledge_base"
+    };
+    
+    return {
+      activeProduct: kbProduct,
+      detectedProduct: kbProduct,
+      stateUpdate: { currentProduct: kbProduct },
+    };
+  }
+
   const shouldAttemptDetection = shouldAttemptProductDetection(normalizedText, currentProduct);
   const detectedMention = shouldAttemptDetection
     ? detectProductMention(text, {
