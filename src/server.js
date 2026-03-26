@@ -77,18 +77,40 @@ app.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
     
-    // Kapso envía los mensajes en formato específico
-    // Verificar si es un mensaje entrante
-    const message = body.messages?.[0] || body.message;
-    if (!message) {
-      return res.status(400).json({ error: 'No message found' });
+    // LOG para diagnóstico
+    console.log('[Webhook] Body recibido:', JSON.stringify(body, null, 2));
+    
+    // Intentar extraer el mensaje de diferentes formatos posibles
+    let from = null;
+    let text = null;
+    
+    // Formato 1: body.message.from (formato que enviamos desde Kapso)
+    if (body.message?.from) {
+      from = body.message.from;
+      text = body.message.text?.body || body.message.text;
+    }
+    // Formato 2: body.messages[0] (formato de webhook tradicional)
+    else if (body.messages?.[0]) {
+      from = body.messages[0].from;
+      text = body.messages[0].text?.body;
+    }
+    // Formato 3: body.from y body.text directo (por si acaso)
+    else if (body.from && (body.text || body.content)) {
+      from = body.from;
+      text = body.text || body.content;
+    }
+    // Formato 4: body.user_response (variable de Kapso)
+    else if (body.user_response) {
+      from = body.phone_number_id || 'unknown';
+      text = body.user_response;
     }
 
-    const from = message.from || message.sender;
-    const text = message.text?.body || message.text || message.content;
-
     if (!from || !text) {
-      return res.status(400).json({ error: 'Missing from or text' });
+      console.error('[Webhook] No se pudo extraer from o text del body:', body);
+      return res.status(400).json({ 
+        error: 'Missing from or text',
+        received: body 
+      });
     }
 
     runtime.webhookEvents += 1;
